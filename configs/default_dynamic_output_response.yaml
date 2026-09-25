@@ -1,0 +1,40 @@
+# Default configuration for the Dynamic Output Response test.
+# Editable in the app's Setup tab, or by hand here. Instrument VISA addresses
+# live under `instruments:` and are set on the Instruments tab.
+
+dut_name: DUT-01
+
+instruments:
+  # Set on the Instruments tab (or paste here). LAN example:
+  #   TCPIP0::192.168.1.10::INSTR   USB example: USB0::0x2EC7::0x8800::SN::INSTR
+  ac_source: "TCPIP0::192.168.1.10::INSTR"
+  e_load: "TCPIP0::192.168.1.11::INSTR"
+  scope: "TCPIP0::192.168.1.12::INSTR"
+
+powerz:
+  mode: manual        # manual | gui
+
+ac_conditions:
+  - {label: "90Vac/60Hz",  voltage: 90,  frequency: 60}
+  - {label: "115Vac/60Hz", voltage: 115, frequency: 60}
+  - {label: "230Vac/50Hz", voltage: 230, frequency: 50}
+  - {label: "264Vac/50Hz", voltage: 264, frequency: 50}
+
+pd_profiles:
+  - {label: "5V",  voltage: 5.0,  i_low_a: 0.0, i_high_a: 3.0}
+  - {label: "9V",  voltage: 9.0,  i_low_a: 0.0, i_high_a: 3.0}
+  - {label: "12V", voltage: 12.0, i_low_a: 0.0, i_high_a: 3.0}
+  - {label: "20V", voltage: 20.0, i_low_a: 0.0, i_high_a: 5.0}
+
+e_load_settings:
+  transient_frequency_hz: 100
+  duty_cycle_pct: 50
+  slew_rate_a_per_us: 1.0
+
+scope_settings:
+  vout_channel: 1
+  measure_cycles_wait_s: 3
+
+limits:
+  tolerance_pct: 5.0
+  overrides: {}       # e.g. {"5V": {vmin_abs: 4.75, vmax_abs: 5.25}}

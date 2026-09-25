@@ -1,0 +1,42 @@
+# Default configuration for the VDS at OVP (feedback break) test.
+
+dut_name: DUT-01
+
+instruments:
+  ac_source: "TCPIP0::192.168.1.10::INSTR"
+  e_load: "TCPIP0::192.168.1.11::INSTR"
+  scope: "TCPIP0::192.168.1.12::INSTR"
+
+ac_conditions:
+  - {label: "230Vac/50Hz", voltage: 230, frequency: 50}
+
+load:
+  current_a: 1.0            # static CC load held on the output during the test
+
+scope:
+  vds_channel: 1            # CH1 = primary MOSFET drain (VDS)
+  vout_channel: 2           # CH2 = DC output (trigger source)
+  probe_atten: 100          # CH1 high-voltage probe
+  vout_probe_atten: 10      # CH2 probe
+  coupling: DC
+  vout_steady_v: 20.0       # expected steady output before OVP
+  vout_trigger_level_v: 22.0  # trigger when the output rises above this
+  vout_fullscale_v: 40.0    # CH2 vertical full-scale
+  main_window_s: 0.5        # MAIN (top) wide window
+  zoom_window_s: 0.05       # ZOOM (bottom) detail
+  zoom_position_s: 0.0
+  vertical_headroom_x: 2.0
+  trigger_timeout_s: 10.0
+  max_retries: 2
+  settle_s: 2.0
+
+limits:
+  fet_vds_rating_v: 650.0
+  derating_pct: 90.0
+
+# Simulation-only knobs (ignored on real hardware):
+simulation:
+  vds_reflected: 100.0      # steady VDS peak = bulk + this
+  steady_out: 20.0          # steady output (CH2) before OVP
+  ovp_vout: 28.0            # output peak when OVP trips
+  ovp_vds_factor: 1.3       # VDS during OVP = steady VDS * this

@@ -1,0 +1,39 @@
+# VDS-at-OVP against the fake bench (tools/fake_bench.py) over real sockets.
+# Turn Simulation OFF in the app and load this, or:
+#   python cli.py --test vds_ovp --config configs/fake_bench_ovp.yaml
+# In the app you'll be prompted to "open the optocoupler switch" — just click
+# Continue (the fake bench simulates the output jerking up).
+
+dut_name: FAKEBENCH-OVP
+
+instruments:
+  ac_source: "TCPIP0::127.0.0.1::5025::SOCKET"
+  e_load: "TCPIP0::127.0.0.1::5026::SOCKET"
+  scope: "TCPIP0::127.0.0.1::5027::SOCKET"
+
+ac_conditions:
+  - {label: "230Vac/50Hz", voltage: 230, frequency: 50}
+
+load:
+  current_a: 1.0
+
+scope:
+  vds_channel: 1
+  vout_channel: 2
+  probe_atten: 100
+  vout_probe_atten: 10
+  coupling: DC
+  vout_steady_v: 20.0
+  vout_trigger_level_v: 22.0
+  vout_fullscale_v: 40.0
+  main_window_s: 0.5
+  zoom_window_s: 0.05
+  zoom_position_s: 0.0
+  vertical_headroom_x: 2.0
+  trigger_timeout_s: 10.0
+  max_retries: 2
+  settle_s: 0.2
+
+limits:
+  fet_vds_rating_v: 650.0
+  derating_pct: 90.0

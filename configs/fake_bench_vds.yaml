@@ -1,0 +1,31 @@
+# VDS Turn-off against the fake bench (tools/fake_bench.py) over real sockets.
+# Turn Simulation mode OFF in the app and load this on the Setup tab, or:
+#   python cli.py --test vds_turnoff --config configs/fake_bench_vds.yaml
+# (needs pyvisa-py: pip install pyvisa-py)
+
+dut_name: FAKEBENCH-VDS
+
+instruments:
+  ac_source: "TCPIP0::127.0.0.1::5025::SOCKET"
+  scope: "TCPIP0::127.0.0.1::5027::SOCKET"
+
+ac_conditions:
+  - {label: "264Vac/50Hz", voltage: 264, frequency: 50}
+  - {label: "90Vac/60Hz",  voltage: 90,  frequency: 60}
+
+scope:
+  channel: 1
+  probe_atten: 100
+  coupling: DC
+  main_window_s: 0.5
+  zoom_window_s: 0.05
+  zoom_position_s: 0.0
+  vertical_headroom_x: 2.0
+  trigger_level_factor: 1.1
+  trigger_timeout_s: 5.0
+  max_retries: 3
+  settle_s: 0.2      # short here; the fake bench responds instantly
+
+limits:
+  fet_vds_rating_v: 650.0
+  derating_pct: 90.0

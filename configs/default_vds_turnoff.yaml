@@ -1,0 +1,36 @@
+# Default configuration for the VDS Max — AC Turn-off test.
+
+dut_name: DUT-01
+
+instruments:
+  ac_source: "TCPIP0::192.168.1.10::INSTR"
+  scope: "TCPIP0::192.168.1.12::INSTR"
+
+ac_conditions:
+  - {label: "264Vac/50Hz", voltage: 264, frequency: 50}
+  - {label: "90Vac/60Hz",  voltage: 90,  frequency: 60}
+
+scope:
+  channel: 1
+  probe_atten: 100          # high-voltage probe ratio
+  coupling: DC
+  # DLM split display: MAIN (top) wide + ZOOM (bottom) detail.
+  main_window_s: 0.5        # top: wide window shows bulk-cap charge/discharge
+  zoom_window_s: 0.05       # bottom: turn-off detail where VDS peaks
+  zoom_position_s: 0.0      # zoom centre, seconds from the turn-off trigger
+  vertical_headroom_x: 2.0  # initial full-scale = measured steady VDS x this
+  trigger_level_factor: 1.1 # arm the single-shot just above the steady peak
+  trigger_timeout_s: 5.0
+  max_retries: 3
+  settle_s: 2.0
+
+limits:
+  fet_vds_rating_v: 650.0
+  derating_pct: 90.0        # PASS if VDS max <= rating * derating/100
+
+# Simulation-only knobs (ignored on real hardware):
+#   vds_reflected: volts added to bulk for the steady VDS peak
+#   vds_spike_factor: turn-off overshoot = steady * this
+simulation:
+  vds_reflected: 100.0
+  vds_spike_factor: 1.2

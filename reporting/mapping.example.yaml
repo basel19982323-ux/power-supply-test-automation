@@ -1,0 +1,24 @@
+# Example report mapping — copy to mapping.yaml and edit when you have the
+# company template. It tells the Excel template-fill where each value goes.
+# Only the `excel` section is used today; `pptx` is reserved for when the real
+# deck's placeholder names are known.
+
+excel:
+  # Sheet + cells that receive the run summary.
+  summary_sheet: "Summary"
+  cells:
+    dut:   "B2"
+    date:  "B3"
+    total: "B4"
+    pass:  "B5"
+    fail:  "B6"
+  # Sheet + top-left cell where the per-point results table is written.
+  # Columns are written in the test's csv_fields order, one row per test point.
+  results_sheet: "Results"
+  results_start_cell: "A2"
+
+pptx:
+  # Reserved. Today PPTX template mode uses your deck as the theme/branding base
+  # and adds our standard content slides. Per-placeholder mapping goes here once
+  # the company template's layout and placeholder names are finalized.
+  point_layout: "Blank"
