@@ -20,7 +20,7 @@ import os
 from core.test_base import Column, Field, Section, TableColumn, TestType
 from core.verdict import PointError, is_number, judge_upper
 
-from .common import clip_check, vds_limit
+from .common import clip_check, quiet_off, vds_limit
 
 
 class VDSTurnoffTest(TestType):
@@ -145,6 +145,14 @@ class VDSTurnoffTest(TestType):
                               float(sc.get("zoom_position_s", 0.0)))
 
     def execute_point(self, point, instruments, config, ctx) -> dict:
+        try:
+            return self._measure(point, instruments, config, ctx)
+        except BaseException:
+            # Whatever went wrong, leave the DUT de-energized before reporting it.
+            quiet_off(ctx, ("turn the AC source off", instruments["ac_source"].off))
+            raise
+
+    def _measure(self, point, instruments, config, ctx) -> dict:
         ac = instruments["ac_source"]
         scope = instruments["scope"]
         sc = config["scope"]
@@ -168,7 +176,6 @@ class VDSTurnoffTest(TestType):
         def measure_steady():
             value = scope.measure_max(ch)
             if not is_number(value):
-                ac.off()
                 raise PointError("NO_READING", f"steady-state VDS: the scope gave no "
                                  f"valid value ({value!r}); AC was turned off without "
                                  f"a capture")
@@ -182,13 +189,20 @@ class VDSTurnoffTest(TestType):
         while True:
             vdiv = target_top / divs
             scope.set_vertical(ch, vdiv, offset=target_top / 2.0)   # 0..target_top visible
-            scope.set_trigger(ch, level=steady * trig_factor, slope="rising", mode="single")
-            scope.arm_single()
+            level = steady * trig_factor
+            scope.set_trigger(ch, level=level, slope="rising", mode="single")
+            if not scope.arm_single():
+                raise PointError("STALE_CAPTURE", "the scope did not confirm a new "
+                                 "single-shot, so the waveform on screen is old; AC was "
+                                 "turned off without using it", retries=retries)
             ctx.status(f"    armed single-shot; cutting AC (full-scale {target_top:.0f} V)")
             ac.off()
-            if not scope.wait_trigger(timeout):
-                ctx.status("    no overshoot trigger within timeout; forcing capture")
-                scope.force_trigger()
+            if not scope.wait_trigger(timeout, cancel=ctx.check_stop):
+                # No forced capture: a forced capture shows whatever is on the
+                # screen, not the turn-off peak, so it could falsely PASS.
+                scope.stop_acquisition()
+                raise PointError("NO_TRIGGER", f"no capture above {level:.0f} V within "
+                                 f"{timeout:g} s after AC off", retries=retries)
             vds_max = scope.measure_max(ch)
             top = scope.read_screen_top(ch)          # what the SCOPE really shows
             clipped = clip_check(vds_max, top)

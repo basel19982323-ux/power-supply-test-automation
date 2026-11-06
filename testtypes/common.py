@@ -21,3 +21,14 @@ def clip_check(reading, screen_top):
     if not is_number(reading):
         return False            # no reading at all: judged as NO_READING instead
     return reading >= screen_top - max(0.02 * screen_top, 1.0)
+
+
+def quiet_off(ctx, *actions):
+    """Run each (name, function) "turn off" action on the error path. Every
+    action is tried even if an earlier one fails, and a failure never hides
+    the original error - it is only reported in the status log."""
+    for name, fn in actions:
+        try:
+            fn()
+        except Exception as e:
+            ctx.status(f"    WARNING: could not {name}: {e}")

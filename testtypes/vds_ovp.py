@@ -19,7 +19,7 @@ import os
 from core.test_base import Column, Field, Section, TableColumn, TestType
 from core.verdict import PointError, is_number, judge_upper, rounded
 
-from .common import clip_check, vds_limit
+from .common import clip_check, quiet_off, vds_limit
 
 
 class VDSOVPTest(TestType):
@@ -163,6 +163,15 @@ class VDSOVPTest(TestType):
         scope.set_vertical(vout_ch, full / divs, offset=full / 2.0)
 
     def execute_point(self, point, instruments, config, ctx) -> dict:
+        try:
+            return self._measure(point, instruments, config, ctx)
+        except BaseException:
+            # Whatever went wrong, leave the DUT de-energized before reporting it.
+            quiet_off(ctx, ("turn the e-load off", instruments["e_load"].stop),
+                      ("turn the AC source off", instruments["ac_source"].off))
+            raise
+
+    def _measure(self, point, instruments, config, ctx) -> dict:
         ac = instruments["ac_source"]
         eload = instruments["e_load"]
         scope = instruments["scope"]
@@ -188,8 +197,6 @@ class VDSOVPTest(TestType):
 
         steady = scope.measure_max(vds_ch)                 # steady VDS (auto-range)
         if not is_number(steady):
-            eload.stop()
-            ac.off()
             raise PointError("NO_READING", f"steady-state VDS: the scope gave no valid "
                              f"value ({steady!r}); the bench was turned off")
         target_top = max(steady * headroom, limit_v * 1.1, steady * 1.2)
@@ -198,7 +205,10 @@ class VDSOVPTest(TestType):
         while True:
             scope.set_vertical(vds_ch, target_top / divs, offset=target_top / 2.0)
             scope.set_trigger(vout_ch, level=trig_level, slope="rising", mode="single")
-            scope.arm_single()
+            if not scope.arm_single():
+                raise PointError("STALE_CAPTURE", "the scope did not confirm a new "
+                                 "single-shot, so the waveform on screen is old",
+                                 retries=retries)
             ctx.status(f"    armed single-shot on CH{vout_ch} (output) rising > "
                        f"{trig_level:.1f} V; full-scale {target_top:.0f} V")
             if not ctx.simulate:
@@ -206,9 +216,11 @@ class VDSOVPTest(TestType):
                     f"Open the optocoupler switch now (break the feedback loop). The "
                     f"output will jump up from {steady_out:.0f} V and trigger the "
                     f"capture. Click Continue once the output has jumped.")
-            if not scope.wait_trigger(timeout):
-                ctx.status("    no OVP trigger within timeout; forcing capture")
-                scope.force_trigger()
+            if not scope.wait_trigger(timeout, cancel=ctx.check_stop):
+                scope.stop_acquisition()              # no forced capture (rule 5)
+                raise PointError("NO_TRIGGER", f"no capture: the output never rose "
+                                 f"above {trig_level:.1f} V within {timeout:g} s",
+                                 retries=retries)
             vds_max = scope.measure_max(vds_ch)
             vout_ovp = scope.measure_max(vout_ch)
             top = scope.read_screen_top(vds_ch)      # what the SCOPE really shows

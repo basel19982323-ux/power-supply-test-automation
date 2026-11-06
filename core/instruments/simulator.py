@@ -25,6 +25,8 @@ class SimBench:
         #   reading_scale: 10   -> scope readings x10 (probe attenuation set wrong)
         #   scope_nan: true     -> the scope answers "no value" (9.91E37 = NaN) for
         #                          captured / dynamic readings
+        #   scope_never_triggers: true -> the single-shot never fires
+        #   scope_not_rearmed: true    -> :STARt is ignored, the old waveform stays
         #   scope_max_top: 500  -> the scope can't show more than 500 V full-scale
         #                          (range limit) and silently clamps, so the top of
         #                          the screen is lower than the app asked for
@@ -179,18 +181,25 @@ class SimScope:
         self._mode = "ovp" if source_ch == 2 else "vds"
 
     def arm_single(self):
+        if self.bench.faults.get("scope_not_rearmed"):
+            return False                      # the old capture stays on screen
         self._armed = True
         self._forced = False
+        return True
 
-    def wait_trigger(self, timeout_s):
+    def wait_trigger(self, timeout_s, cancel=None):
         # Turn-off: fires when AC goes off. OVP: fires on the (simulated) operator
         # opening the optocoupler after arming.
+        if cancel is not None:
+            cancel()
+        if self.bench.faults.get("scope_never_triggers"):
+            return False
         if self._trig_source == 2:
             return bool(self._armed)
         return bool(self._armed and not self.bench.ac_on)
 
-    def force_trigger(self):
-        self._forced = True
+    def stop_acquisition(self):
+        self._armed = False
 
     def _steady_vds(self):
         return self.bench.ac_voltage * 1.41421 + self.bench.vds_reflected

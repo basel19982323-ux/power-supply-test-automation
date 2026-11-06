@@ -74,6 +74,7 @@ class Bench:
         self.offsets = {}            # per-channel vertical offset
         self.armed = False
         self.forced = False
+        self.polls_since_arm = 0     # :STAT? polls since the last :STARt
         self.zoom_on = False
         self.main_window = 0.5
         self.zoom_window = 0.05
@@ -166,8 +167,10 @@ def scope_handler(bench, cmd):
     if u.startswith(":STAR"):                      # arm single-shot
         bench.armed = True
         bench.forced = False
+        bench.polls_since_arm = 0
         return None
     if u.startswith(":STOP"):
+        bench.armed = False                         # acquisition stopped, no capture
         return None
     if u.startswith(":TRIG"):
         if "FORC" in u:
@@ -176,8 +179,17 @@ def scope_handler(bench, cmd):
             bench.trig_source = int(last_num(cmd, 1))
         return None
     if u.startswith(":STAT"):                       # :STATus:CONDition?
+        # Running = armed and waiting. Turn-off test: waits until AC goes off.
+        # OVP test: running on the first poll (arm confirmed), then the
+        # (simulated) operator opens the switch and it triggers.
+        bench.polls_since_arm += 1
         ovp = (bench.trig_source == 2)
-        running = bench.armed and not bench.forced and (bench.ac_on and not ovp)
+        if not bench.armed or bench.forced:
+            running = False
+        elif ovp:
+            running = bench.polls_since_arm == 1
+        else:
+            running = bench.ac_on
         return "1" if running else "0"
     if ":MEAS" in u:
         if "MAX" in u and "VAL" in u:

@@ -150,30 +150,38 @@ class YokogawaScope:
         self.inst.write(CMDS["trig_slope"].format(s=_SLOPE.get(slope, "RISE")))
         self.inst.write(CMDS["trig_mode"].format(m="SINGle" if mode == "single" else mode.upper()))
 
+    def _running(self):
+        cond = parse_number(self.inst.query(CMDS["cond"]), what="scope status")
+        if cond != cond:                          # NaN: no status at all
+            return False
+        return bool(int(cond) & _RUNNING_BIT)
+
     def arm_single(self):
+        """Start a new single-shot acquisition. Returns True only if the scope
+        CONFIRMS it is now running (waiting for a trigger). False means the
+        waveform on screen is still the OLD one (rule 3: never use it)."""
         self.inst.write(CMDS["trig_mode"].format(m="SINGle"))
         self.inst.write(CMDS["acq_start"])
+        return self._running()
 
-    def wait_trigger(self, timeout_s):
+    def wait_trigger(self, timeout_s, cancel=None):
         """Poll until the single acquisition completes (acquisition stops).
-        Returns True if it triggered, False on timeout. Status-bit semantics are
-        model-specific — verify _RUNNING_BIT against your DLM manual."""
+        Returns True if it triggered, False on timeout. A communication error is
+        NOT hidden any more - it goes up to the runner (TIMEOUT, DISCONNECTED,
+        BAD_REPLY). `cancel` is called on every poll so Stop works while waiting.
+        Status-bit semantics are model-specific: verify _RUNNING_BIT."""
         deadline = time.time() + timeout_s
         while time.time() < deadline:
-            try:
-                cond = int(self.inst.query(CMDS["cond"]).strip())
-                if not (cond & _RUNNING_BIT):   # acquisition stopped => triggered
-                    return True
-            except Exception:
-                break
+            if cancel is not None:
+                cancel()
+            if not self._running():               # acquisition stopped => triggered
+                return True
             time.sleep(0.05)
         return False
 
-    def force_trigger(self):
-        try:
-            self.inst.write(CMDS["force_trig"])
-        except Exception:
-            self.inst.write(CMDS["acq_stop"])   # fall back: stop to freeze the record
+    def stop_acquisition(self):
+        """Stop a single-shot that never triggered, so the scope is not left armed."""
+        self.inst.write(CMDS["acq_stop"])
 
     def measure_max(self, ch):
         self.inst.write(CMDS["meas_on"])
