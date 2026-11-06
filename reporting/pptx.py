@@ -29,7 +29,10 @@ def build_pptx(rows, test, config, out_path, run_dir, template=None):
     # ---- one slide per test point ---- #
     blank = _blank_layout(prs)
     cols = test.result_columns
-    text_cols = [c for c in cols if c.kind == "text"]
+    # Slide title = the point's identity (e.g. "5V | 90Vac/60Hz") + result;
+    # the error code and reason go in the side text, not the title.
+    text_cols = [c for c in cols if c.kind == "text"
+                 and c.key not in ("error_code", "reason")]
     for row in rows:
         s = prs.slides.add_slide(blank)
 

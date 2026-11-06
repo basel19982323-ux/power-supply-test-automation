@@ -15,7 +15,10 @@ Adding a new test = writing one module implementing this interface and
 registering it. No GUI, runner, or reporting code changes.
 """
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Any, Callable
+
+from .verdict import summarize as _summarize
 
 
 # --------------------------------------------------------------------------- #
@@ -127,8 +130,28 @@ class TestType:
     def finish(self, instruments: dict, config: dict, ctx: RunContext) -> None:
         """Optional teardown hook (instruments are closed by the runner)."""
 
+    # ---- result rows ---------------------------------------------------- #
+    def identity(self, point: dict, config: dict) -> dict:
+        """The columns that say WHICH point this is (AC condition, limits, ...).
+        They are filled in even when the point is ERROR or NOT RUN.
+        Default: the point's keys that are also CSV fields."""
+        return {k: v for k, v in point.items() if k in self.csv_fields}
+
+    def make_row(self, point: dict, config: dict, result: str, code: str = "",
+                 reason: str = "", **values) -> dict:
+        """Build one result row: identity columns + measured values + result,
+        error code and reason. Used for PASS/FAIL rows and for ERROR/NOT RUN rows,
+        so every row has the same columns."""
+        row = dict.fromkeys(self.csv_fields, "")
+        row["timestamp"] = datetime.now().isoformat(timespec="seconds")
+        row["dut"] = config.get("dut_name", "DUT")
+        row.update(self.identity(point, config))
+        row.update(values)
+        row.update(result=result, error_code=code, reason=reason)
+        return row
+
     # ---- summary helper ------------------------------------------------- #
     @staticmethod
     def summarize(rows: list) -> dict:
-        fails = [r for r in rows if r.get("result") == "FAIL"]
-        return {"total": len(rows), "pass": len(rows) - len(fails), "fail": len(fails)}
+        """Counts of PASS / FAIL / ERROR / NOT RUN (see core.verdict)."""
+        return _summarize(rows)

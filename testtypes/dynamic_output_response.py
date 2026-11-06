@@ -9,7 +9,6 @@ This is a direct port of the original runner.py matrix logic into the generic
 TestType interface: plan() builds the point list, execute_point() runs one point.
 """
 import os
-from datetime import datetime
 
 from core.test_base import Column, Field, Section, TableColumn, TestType
 
@@ -31,10 +30,13 @@ class DynamicOutputResponseTest(TestType):
         Column("vmin_limit_v", "Vmin limit", "number", 3),
         Column("vmax_limit_v", "Vmax limit", "number", 3),
         Column("result", "Result", "result"),
+        Column("error_code", "Code", "text"),
+        Column("reason", "Reason", "text"),
     ]
     csv_fields = ["timestamp", "dut", "pd_profile", "ac_condition", "vin_set_v",
                   "freq_hz", "i_low_a", "i_high_a", "vmax_v", "vmin_v",
-                  "vmin_limit_v", "vmax_limit_v", "result", "screenshot"]
+                  "vmin_limit_v", "vmax_limit_v", "result", "screenshot",
+                  "error_code", "reason"]
 
     # ---- configuration -------------------------------------------------- #
     def default_config(self) -> dict:
@@ -178,24 +180,24 @@ class DynamicOutputResponseTest(TestType):
         result = "PASS" if (vmin >= vmin_l and vmax <= vmax_l) else "FAIL"
         ctx.status(f"    limits [{vmin_l:.3f}, {vmax_l:.3f}] V -> {result}")
 
+        return self.make_row(point, config, result,
+                             vmax_v=round(vmax, 4), vmin_v=round(vmin, 4),
+                             screenshot=shot_rel)
+
+    # ---- helpers -------------------------------------------------------- #
+    def identity(self, point, config):
+        vmin_l, vmax_l = self._limits(config, point)
         return {
-            "timestamp": datetime.now().isoformat(timespec="seconds"),
-            "dut": dut,
             "pd_profile": point["pd_profile"],
             "ac_condition": point["ac_condition"],
             "vin_set_v": point["ac_voltage"],
             "freq_hz": point["ac_frequency"],
             "i_low_a": point["i_low_a"],
             "i_high_a": point["i_high_a"],
-            "vmax_v": round(vmax, 4),
-            "vmin_v": round(vmin, 4),
             "vmin_limit_v": round(vmin_l, 4),
             "vmax_limit_v": round(vmax_l, 4),
-            "result": result,
-            "screenshot": shot_rel,
         }
 
-    # ---- helpers -------------------------------------------------------- #
     @staticmethod
     def _limits(config, point):
         lim = config["limits"]

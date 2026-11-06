@@ -14,7 +14,8 @@ def test_ovp_sim_pass(tmp_path):
     t = testtypes.get_test("vds_ovp")
     res = run_test(t, t.default_config(), simulate=True, output_root=str(tmp_path))
     assert res.error is None and res.aborted is False
-    assert res.summary == {"total": 1, "pass": 1, "fail": 0}
+    assert res.summary == {"total": 1, "pass": 1, "fail": 0, "error": 0, "not_run": 0}
+    assert res.overall == "PASS"
     row = res.rows[0]
     assert row["load_a"] == 1.0
     assert abs(row["vout_ovp_v"] - 28.0) < 0.1     # output peak at OVP (CH2)

@@ -15,9 +15,10 @@ e-load (static CC) and a CH2-based trigger. The difference from Turn-off is only
 the trigger condition and that the event is operator-initiated.
 """
 import os
-from datetime import datetime
 
 from core.test_base import Column, Field, Section, TableColumn, TestType
+
+from .common import vds_limit
 
 
 class VDSOVPTest(TestType):
@@ -39,10 +40,13 @@ class VDSOVPTest(TestType):
         Column("limit_v", "Limit (V)", "number", 1),
         Column("retries", "Retries", "number", 0),
         Column("result", "Result", "result"),
+        Column("error_code", "Code", "text"),
+        Column("reason", "Reason", "text"),
     ]
     csv_fields = ["timestamp", "dut", "ac_condition", "vin_set_v", "freq_hz", "load_a",
                   "vout_steady_v", "vout_ovp_v", "fet_rating_v", "derating_pct",
-                  "limit_v", "vds_max_v", "clipped", "retries", "result", "screenshot"]
+                  "limit_v", "vds_max_v", "clipped", "retries", "result", "screenshot",
+                  "error_code", "reason"]
 
     # ---- configuration -------------------------------------------------- #
     def default_config(self) -> dict:
@@ -164,13 +168,10 @@ class VDSOVPTest(TestType):
         eload = instruments["e_load"]
         scope = instruments["scope"]
         sc = config["scope"]
-        lim = config["limits"]
         vds_ch, vout_ch = int(sc["vds_channel"]), int(sc["vout_channel"])
         divs = getattr(scope, "VERT_DIVS", 8)
 
-        rating = float(lim.get("fet_vds_rating_v", 0) or 0)
-        derating = float(lim.get("derating_pct", 100) or 100)
-        limit_v = rating * derating / 100.0
+        _, _, limit_v = vds_limit(config)
 
         steady_out = float(sc.get("vout_steady_v", 20.0))
         trig_level = float(sc.get("vout_trigger_level_v", 22.0))
@@ -229,21 +230,19 @@ class VDSOVPTest(TestType):
         ctx.status(f"    VDS max {vds_max:.1f} V (Vout OVP {vout_ovp:.1f} V) "
                    f"limit {limit_v:.1f} V -> {result}{note}")
 
+        return self.make_row(point, config, result,
+                             vout_ovp_v=round(vout_ovp, 2), vds_max_v=round(vds_max, 1),
+                             clipped=clipped, retries=retries, screenshot=shot_rel)
+
+    def identity(self, point, config):
+        rating, derating, limit_v = vds_limit(config)
         return {
-            "timestamp": datetime.now().isoformat(timespec="seconds"),
-            "dut": dut,
             "ac_condition": point["ac_condition"],
             "vin_set_v": point["ac_voltage"],
             "freq_hz": point["ac_frequency"],
-            "load_a": load_a,
-            "vout_steady_v": steady_out,
-            "vout_ovp_v": round(vout_ovp, 2),
+            "load_a": float(config["load"]["current_a"]),
+            "vout_steady_v": float(config["scope"].get("vout_steady_v", 20.0)),
             "fet_rating_v": rating,
             "derating_pct": derating,
             "limit_v": round(limit_v, 1),
-            "vds_max_v": round(vds_max, 1),
-            "clipped": clipped,
-            "retries": retries,
-            "result": result,
-            "screenshot": shot_rel,
         }

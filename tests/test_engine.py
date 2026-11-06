@@ -43,7 +43,8 @@ def test_run_sim_all_pass(tmp_path):
     t = testtypes.default_test()
     res = run_test(t, t.default_config(), simulate=True, output_root=str(tmp_path))
     assert res.error is None and res.aborted is False
-    assert res.summary == {"total": 16, "pass": 16, "fail": 0}
+    assert res.summary == {"total": 16, "pass": 16, "fail": 0, "error": 0, "not_run": 0}
+    assert res.overall == "PASS"
     assert os.path.exists(res.csv_path)
     shots = os.listdir(os.path.join(res.run_dir, "screenshots"))
     assert len(shots) == 16

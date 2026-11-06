@@ -14,9 +14,10 @@ condition is whatever you set up physically (e-load, resistor, or none) — this
 test does not control a load.
 """
 import os
-from datetime import datetime
 
 from core.test_base import Column, Field, Section, TableColumn, TestType
+
+from .common import vds_limit
 
 
 class VDSTurnoffTest(TestType):
@@ -37,10 +38,13 @@ class VDSTurnoffTest(TestType):
         Column("fet_rating_v", "FET rating (V)", "number", 0),
         Column("retries", "Retries", "number", 0),
         Column("result", "Result", "result"),
+        Column("error_code", "Code", "text"),
+        Column("reason", "Reason", "text"),
     ]
     csv_fields = ["timestamp", "dut", "ac_condition", "vin_set_v", "freq_hz",
                   "fet_rating_v", "derating_pct", "limit_v", "vds_max_v",
-                  "clipped", "retries", "result", "screenshot"]
+                  "clipped", "retries", "result", "screenshot",
+                  "error_code", "reason"]
 
     # ---- configuration -------------------------------------------------- #
     def default_config(self) -> dict:
@@ -143,13 +147,10 @@ class VDSTurnoffTest(TestType):
         ac = instruments["ac_source"]
         scope = instruments["scope"]
         sc = config["scope"]
-        lim = config["limits"]
         ch = int(sc["channel"])
         divs = getattr(scope, "VERT_DIVS", 8)
 
-        rating = float(lim.get("fet_vds_rating_v", 0) or 0)
-        derating = float(lim.get("derating_pct", 100) or 100)
-        limit_v = rating * derating / 100.0
+        _, _, limit_v = vds_limit(config)
 
         headroom = float(sc.get("vertical_headroom_x", 2.0))
         trig_factor = float(sc.get("trigger_level_factor", 1.1))
@@ -199,18 +200,17 @@ class VDSTurnoffTest(TestType):
         note = " (CLIPPED — increase headroom/probe)" if clipped else ""
         ctx.status(f"    VDS max {vds_max:.1f} V  limit {limit_v:.1f} V -> {result}{note}")
 
+        return self.make_row(point, config, result,
+                             vds_max_v=round(vds_max, 1), clipped=clipped,
+                             retries=retries, screenshot=shot_rel)
+
+    def identity(self, point, config):
+        rating, derating, limit_v = vds_limit(config)
         return {
-            "timestamp": datetime.now().isoformat(timespec="seconds"),
-            "dut": dut,
             "ac_condition": point["ac_condition"],
             "vin_set_v": point["ac_voltage"],
             "freq_hz": point["ac_frequency"],
             "fet_rating_v": rating,
             "derating_pct": derating,
             "limit_v": round(limit_v, 1),
-            "vds_max_v": round(vds_max, 1),
-            "clipped": clipped,
-            "retries": retries,
-            "result": result,
-            "screenshot": shot_rel,
         }

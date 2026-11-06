@@ -15,17 +15,20 @@ import threading
 from .instruments.factory import build_instruments
 from .results import new_run_dir, write_csv
 from .test_base import AbortError, Callbacks, RunContext
+from .verdict import overall as overall_result
 
 
 class RunResult:
     def __init__(self, run_dir, csv_path, rows, summary,
-                 aborted=False, error=None):
+                 aborted=False, error=None, overall=None):
         self.run_dir = run_dir
         self.csv_path = csv_path
         self.rows = rows
-        self.summary = summary
+        self.summary = summary        # counts: total / pass / fail / error / not_run
         self.aborted = aborted
         self.error = error
+        # PASS / FAIL / ERROR / NOT RUN for the whole run (see core.verdict)
+        self.overall = overall if overall is not None else overall_result(rows, error)
 
 
 def run_test(test, config, *, simulate=False, callbacks=None,
@@ -90,9 +93,9 @@ def run_test(test, config, *, simulate=False, callbacks=None,
                 pass
         fields = test.csv_fields or [c.key for c in test.result_columns]
         write_csv(csv_path, fields, rows)
-        summary = test.summarize(rows)
-        ctx.status(f"Saved {len(rows)} rows -> {csv_path}  "
-                   f"({summary['pass']} PASS / {summary['fail']} FAIL)")
+        s = test.summarize(rows)
+        ctx.status(f"Saved {len(rows)} rows -> {csv_path}  ({s['pass']} PASS / "
+                   f"{s['fail']} FAIL / {s['error']} ERROR / {s['not_run']} NOT RUN)")
 
     return RunResult(run_dir, csv_path, rows, test.summarize(rows),
                      aborted=aborted, error=error)
