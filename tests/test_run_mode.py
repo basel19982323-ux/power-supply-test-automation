@@ -117,3 +117,39 @@ def test_fake_bench_run_is_labelled_fake_bench_not_live(run_on_fake_bench):
 
 def test_old_run_folder_without_run_info_is_unknown(tmp_path):
     assert read_run_info(str(tmp_path))["mode"] == UNKNOWN
+
+
+# ---- the CI demo: cli.py --simulate --report ------------------------------ #
+def test_cli_report_says_simulation(tmp_path, monkeypatch, capsys):
+    import cli
+    import core.runner
+    from core.results import new_run_dir
+    monkeypatch.setattr(core.runner, "new_run_dir",
+                        lambda dut, root=None: new_run_dir(dut, str(tmp_path / "out")))
+    assert cli.main(["--test", "vds_ovp", "--simulate", "--report"]) == 0
+    out = capsys.readouterr().out
+    assert "Run mode: SIMULATION" in out
+    run_dir = os.path.join(tmp_path, "out", os.listdir(tmp_path / "out")[0])
+    xlsx = [f for f in os.listdir(run_dir) if f.endswith(".xlsx")]
+    pptx = [f for f in os.listdir(run_dir) if f.endswith(".pptx")]
+    assert xlsx and pptx
+    ws = load_workbook(os.path.join(run_dir, xlsx[0]))["Summary"]
+    assert {ws.cell(r, 1).value: ws.cell(r, 2).value
+            for r in range(3, 12)}["Run mode"] == SIMULATION
+    slide = Presentation(os.path.join(run_dir, pptx[0])).slides[0]
+    assert any("Run mode: SIMULATION" in sh.text_frame.text
+               for sh in slide.shapes if sh.has_text_frame)
+
+
+def test_cli_report_failure_is_a_failed_exit_code(tmp_path, monkeypatch, capsys):
+    import cli
+    import core.runner
+    from core.results import new_run_dir
+    monkeypatch.setattr(core.runner, "new_run_dir",
+                        lambda dut, root=None: new_run_dir(dut, str(tmp_path / "out")))
+
+    def broken(*a, **k):
+        raise OSError("disk full")
+    monkeypatch.setattr(reporting, "generate", broken)
+    assert cli.main(["--test", "vds_ovp", "--simulate", "--report"]) == cli.EXIT_REPORT_FAILED
+    assert "could not be written" in capsys.readouterr().err
