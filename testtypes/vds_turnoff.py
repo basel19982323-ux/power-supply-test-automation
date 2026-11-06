@@ -20,7 +20,8 @@ import os
 from core.test_base import Column, Field, Section, TableColumn, TestType
 from core.verdict import PointError, judge_upper
 
-from .common import (PROBE_CHECK_MAX_X, PROBE_CHECK_MIN_X, check_steady_vds,
+from .common import (PROBE_CHECK_MAX_X, PROBE_CHECK_MAX_X_RATING,
+                     PROBE_CHECK_MIN_X, check_steady_vds,
                      clip_check, quiet_off, vds_limit)
 
 
@@ -74,6 +75,7 @@ class VDSTurnoffTest(TestType):
                 "settle_s": 2.0,             # DUT stabilize time after AC on
                 "probe_check_min_x": PROBE_CHECK_MIN_X,  # steady VDS vs AC peak
                 "probe_check_max_x": PROBE_CHECK_MAX_X,
+                "probe_check_max_x_rating": PROBE_CHECK_MAX_X_RATING,
             },
             "limits": {
                 "fet_vds_rating_v": 650.0,
@@ -113,6 +115,8 @@ class VDSTurnoffTest(TestType):
                           PROBE_CHECK_MIN_X, "x AC peak"),
                     Field("probe_check_max_x", "Probe check: max VDS", "number",
                           PROBE_CHECK_MAX_X, "x AC peak"),
+                    Field("probe_check_max_x_rating", "Probe check: max VDS at least",
+                          "number", PROBE_CHECK_MAX_X_RATING, "x FET rating"),
                 ],
             ),
             Section(
@@ -166,7 +170,7 @@ class VDSTurnoffTest(TestType):
         ch = int(sc["channel"])
         divs = getattr(scope, "VERT_DIVS", 8)
 
-        _, _, limit_v = vds_limit(config)
+        rating, _, limit_v = vds_limit(config)
 
         headroom = float(sc.get("vertical_headroom_x", 2.0))
         trig_factor = float(sc.get("trigger_level_factor", 1.1))
@@ -181,7 +185,8 @@ class VDSTurnoffTest(TestType):
                 ctx.sleep(settle)
 
         def measure_steady():
-            return check_steady_vds(scope.measure_max(ch), point["ac_voltage"], sc)
+            return check_steady_vds(scope.measure_max(ch), point["ac_voltage"], sc,
+                                    rating)
 
         establish_ac()
         steady = measure_steady()

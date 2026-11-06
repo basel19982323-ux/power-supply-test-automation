@@ -39,6 +39,45 @@ def test_probe_check_limits_come_from_the_config():
         check_steady_vds(473.0, 230, {"probe_check_max_x": 1.2})   # 473 > 1.2 x 325
 
 
+# ---- low line (90 Vac): the top of the range is never below 1.5 x the FET rating
+# 90 Vac -> AC peak 127 V; 3 x 127 = 382 V. A healthy flyback can read more:
+# 127 V bulk + ~130 V reflected + ~130 V leakage spike = ~387 V.
+def test_healthy_low_line_dut_is_not_stopped_by_the_probe_check():
+    assert check_steady_vds(387.0, 90, {}, fet_rating_v=650.0) == 387.0   # top 975 V
+
+
+def test_without_a_rating_the_old_3x_top_still_applies():
+    with pytest.raises(PointError) as e:
+        check_steady_vds(387.0, 90, {})
+    assert e.value.code == "PROBE_CHECK"
+
+
+def test_ten_times_probe_mistake_at_low_line_is_still_caught():
+    with pytest.raises(PointError) as e:
+        check_steady_vds(2500.0, 90, {}, fet_rating_v=650.0)   # real 250 V read as 2500 V
+    assert e.value.code == "PROBE_CHECK" and "attenuation" in e.value.reason
+
+
+def test_a_real_overvoltage_below_the_top_is_measured_not_hidden():
+    # 700 V is above the 585 V limit: it must go on to be judged FAIL, not ERROR.
+    assert check_steady_vds(700.0, 90, {}, fet_rating_v=650.0) == 700.0
+
+
+def test_rating_factor_comes_from_the_config():
+    with pytest.raises(PointError):
+        check_steady_vds(700.0, 90, {"probe_check_max_x_rating": 1.0}, fet_rating_v=650.0)
+
+
+def test_low_line_run_with_high_reflected_voltage_passes(tmp_path):
+    # Simulated DUT at 90 Vac whose steady VDS peak is 127 + 260 = 387 V.
+    t = testtypes.get_test("vds_turnoff")
+    cfg = t.default_config()
+    cfg["ac_conditions"] = [c for c in cfg["ac_conditions"] if c["voltage"] == 90]
+    cfg["simulation"] = {"vds_reflected": 260.0}
+    res = run_test(t, cfg, simulate=True, output_root=str(tmp_path))
+    assert [r["result"] for r in res.rows] == ["PASS"]
+
+
 def test_nan_steady_vds_is_no_reading():
     with pytest.raises(PointError) as e:
         check_steady_vds(float("nan"), 230, {})

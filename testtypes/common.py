@@ -4,7 +4,8 @@ import math
 from core.verdict import PointError, is_number
 
 PROBE_CHECK_MIN_X = 0.5     # steady VDS must be at least 0.5 x the AC peak ...
-PROBE_CHECK_MAX_X = 3.0     # ... and at most 3 x the AC peak
+PROBE_CHECK_MAX_X = 3.0     # ... and at most 3 x the AC peak,
+PROBE_CHECK_MAX_X_RATING = 1.5   # ... but the top is never below 1.5 x the FET rating
 LOAD_CHECK_PCT = 90.0       # the load must draw at least 90 % of its setting
 
 
@@ -40,7 +41,7 @@ def quiet_off(ctx, *actions):
             ctx.status(f"    WARNING: could not {name}: {e}")
 
 
-def check_steady_vds(value, ac_voltage, scope_cfg):
+def check_steady_vds(value, ac_voltage, scope_cfg, fet_rating_v=0.0):
     """Probe check (rule 4), done BEFORE the AC is cut or the event starts.
 
     While the flyback runs, the MOSFET drain sees at least the bulk capacitor
@@ -48,13 +49,24 @@ def check_steady_vds(value, ac_voltage, scope_cfg):
     peak must be clearly above 0 and not wildly above the AC peak. About 0 V
     means the probe is not connected (or the wrong channel); a huge value means
     the probe attenuation is set wrong. Either way the capture can't be trusted.
+
+    Top of the range = the larger of (3 x AC peak) and (1.5 x FET rating).
+    At low line the AC peak is small (90 Vac -> 127 V), but the steady peak
+    still holds the full reflected voltage and the leakage spike, so 3 x the
+    AC peak alone (382 V) could reject a healthy DUT. A real reading can't be
+    far above the FET rating (the FET would be in avalanche), while a 10x
+    probe-ratio mistake is far above 1.5 x the rating - so it is still caught.
+    A real over-voltage below that top is measured and judged (FAIL), not
+    hidden as ERROR.
     """
     if not is_number(value):
         raise PointError("NO_READING", f"steady-state VDS: the scope gave no valid "
                          f"value ({value!r}); the bench was turned off")
     ac_peak = math.sqrt(2) * float(ac_voltage)
     lo = float(scope_cfg.get("probe_check_min_x", PROBE_CHECK_MIN_X)) * ac_peak
-    hi = float(scope_cfg.get("probe_check_max_x", PROBE_CHECK_MAX_X)) * ac_peak
+    hi = max(float(scope_cfg.get("probe_check_max_x", PROBE_CHECK_MAX_X)) * ac_peak,
+             float(scope_cfg.get("probe_check_max_x_rating", PROBE_CHECK_MAX_X_RATING))
+             * float(fet_rating_v or 0))
     if not lo <= value <= hi:
         hint = ("probe disconnected or wrong channel?" if value < lo
                 else "probe attenuation set wrong?")

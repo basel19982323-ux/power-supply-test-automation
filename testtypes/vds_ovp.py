@@ -19,7 +19,8 @@ import os
 from core.test_base import Column, Field, Section, TableColumn, TestType
 from core.verdict import PointError, judge_upper, rounded
 
-from .common import (LOAD_CHECK_PCT, PROBE_CHECK_MAX_X, PROBE_CHECK_MIN_X,
+from .common import (LOAD_CHECK_PCT, PROBE_CHECK_MAX_X, PROBE_CHECK_MAX_X_RATING,
+                     PROBE_CHECK_MIN_X,
                      check_load_current, check_steady_output, check_steady_vds,
                      clip_check, quiet_off, vds_limit)
 
@@ -78,6 +79,7 @@ class VDSOVPTest(TestType):
                 "settle_s": 2.0,
                 "probe_check_min_x": PROBE_CHECK_MIN_X,  # steady VDS vs AC peak
                 "probe_check_max_x": PROBE_CHECK_MAX_X,
+                "probe_check_max_x_rating": PROBE_CHECK_MAX_X_RATING,
             },
             "limits": {
                 "fet_vds_rating_v": 650.0,
@@ -125,6 +127,8 @@ class VDSOVPTest(TestType):
                           PROBE_CHECK_MIN_X, "x AC peak"),
                     Field("probe_check_max_x", "Probe check: max VDS", "number",
                           PROBE_CHECK_MAX_X, "x AC peak"),
+                    Field("probe_check_max_x_rating", "Probe check: max VDS at least",
+                          "number", PROBE_CHECK_MAX_X_RATING, "x FET rating"),
                 ],
             ),
             Section(
@@ -187,7 +191,7 @@ class VDSOVPTest(TestType):
         vds_ch, vout_ch = int(sc["vds_channel"]), int(sc["vout_channel"])
         divs = getattr(scope, "VERT_DIVS", 8)
 
-        _, _, limit_v = vds_limit(config)
+        rating, _, limit_v = vds_limit(config)
 
         steady_out = float(sc.get("vout_steady_v", 20.0))
         trig_level = float(sc.get("vout_trigger_level_v", 22.0))
@@ -208,7 +212,8 @@ class VDSOVPTest(TestType):
                            float(config["load"].get("check_pct", LOAD_CHECK_PCT)),
                            f"{load_a:g} A static load")
         # Probe checks before the event (rule 4): VDS on CH1, the output on CH2.
-        steady = check_steady_vds(scope.measure_max(vds_ch), point["ac_voltage"], sc)
+        steady = check_steady_vds(scope.measure_max(vds_ch), point["ac_voltage"], sc,
+                                  rating)
         check_steady_output(scope.measure_max(vout_ch), steady_out, trig_level)
         target_top = max(steady * headroom, limit_v * 1.1, steady * 1.2)
 
