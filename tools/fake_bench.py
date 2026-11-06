@@ -56,11 +56,29 @@ def block(data):
     return b"#" + str(len(n)).encode() + n + data
 
 
+# Fault switches: name -> what the fake instrument does wrong. Tests turn them
+# on with Bench(faults={"name": value}). An unknown name is an error, so a typo
+# can never make a test silently run with no fault at all.
+FAULTS = {}
+
+
 class Bench:
-    """Shared state across the three fake instruments (like the app's SimBench)."""
+    """Shared state across the three fake instruments (like the app's SimBench).
+
+    `log` records every command each instrument received and what it answered,
+    as (role, command, reply) - reply is None when nothing was sent back. Tests
+    use it to check what the REAL drivers sent, e.g. that "OUTPut OFF" was sent
+    and that "OUTPut?" was then answered "0" (off confirmed)."""
 
     def __init__(self, reflected=100.0, spike_factor=1.2, pd_nominal=5.0,
-                 steady_out=20.0, ovp_vout=28.0, ovp_vds_factor=1.3):
+                 steady_out=20.0, ovp_vout=28.0, ovp_vds_factor=1.3, faults=None):
+        unknown = set(faults or {}) - set(FAULTS)
+        if unknown:
+            raise ValueError(f"unknown fake-bench fault(s): {sorted(unknown)}; "
+                             f"known: {sorted(FAULTS)}")
+        self.faults = dict(faults or {})
+        self.log = []
+        self._log_lock = threading.Lock()
         self.ac_voltage = 0.0
         self.ac_freq = 50.0
         self.ac_on = False
@@ -86,6 +104,14 @@ class Bench:
         self.last_vds = (0.0, 0.0, 0.0, False)
         self.ovp = {"vds": 0.0, "vds_top": 0.0, "vds_clip": False,
                     "vout": 0.0, "vout_top": 0.0}
+
+    def record(self, role, cmd, reply):
+        with self._log_lock:
+            self.log.append((role, cmd, reply))
+
+    def sent(self, role):
+        """Commands `role` received, upper-case, in order."""
+        return [c.upper() for r, c, _ in self.log if r == role]
 
     def load_current(self):
         """What the fake e-load draws: the static level, or the time-average of
@@ -305,15 +331,31 @@ def _scope_png(bench):
 # TCP SCPI server
 # --------------------------------------------------------------------------- #
 class SCPIServer(threading.Thread):
-    def __init__(self, label, host, port, handler, bench, verbose=False):
+    def __init__(self, label, host, port, handler, bench, verbose=False, role=None):
         super().__init__(daemon=True)
         self.label = label
+        self.role = role or HANDLER_ROLES.get(handler, label)
         self.host = host
         self.port = port
         self.handler = handler
         self.bench = bench
         self.verbose = verbose
         self.sock = None
+        self.conns = []
+        self.stopped = False
+
+    @property
+    def address(self):
+        return f"TCPIP0::{self.host}::{self.port}::SOCKET"
+
+    def stop(self):
+        """Close the listening socket and every open connection."""
+        self.stopped = True
+        for s in [self.sock] + self.conns:
+            try:
+                s.close()
+            except (OSError, AttributeError):
+                pass
 
     def bind(self):
         """Bind the port up front (no SO_REUSEADDR) so a second copy of the fake
@@ -326,12 +368,17 @@ class SCPIServer(threading.Thread):
             self.sock.close()
             self.sock = None
             return False
+        self.port = self.sock.getsockname()[1]      # the real port when port=0
         self.sock.listen(5)
         return True
 
     def run(self):
-        while True:
-            conn, _ = self.sock.accept()
+        while not self.stopped:
+            try:
+                conn, _ = self.sock.accept()
+            except OSError:                          # stop() closed the socket
+                return
+            self.conns.append(conn)
             threading.Thread(target=self._serve, args=(conn,), daemon=True).start()
 
     def _serve(self, conn):
@@ -350,6 +397,8 @@ class SCPIServer(threading.Thread):
                     if not cmd:
                         continue
                     resp = self.handler(self.bench, cmd)
+                    self.bench.record(self.role, cmd, None if resp is None else
+                                      "<PNG>" if isinstance(resp, tuple) else str(resp))
                     if self.verbose:
                         print(f"[{self.label}] <- {cmd}")
                     if resp is None:
@@ -371,6 +420,27 @@ class SCPIServer(threading.Thread):
                 conn.close()
             except OSError:
                 pass
+
+
+HANDLER_ROLES = {ac_handler: "ac_source", eload_handler: "e_load",
+                 scope_handler: "scope"}
+ROLE_HANDLERS = {role: h for h, role in HANDLER_ROLES.items()}
+
+
+def start_servers(bench, host="127.0.0.1", ports=None, verbose=False):
+    """Start one server per role (port 0 = any free port) and return
+    {role: server}. Used by the tests; stop them with server.stop()."""
+    ports = ports or {role: 0 for role in ROLE_HANDLERS}
+    servers = {}
+    for role, port in ports.items():
+        s = SCPIServer(role, host, port, ROLE_HANDLERS[role], bench, verbose, role=role)
+        if not s.bind():
+            for started in servers.values():
+                started.stop()
+            raise OSError(f"fake bench: cannot bind {host}:{port} for {role}")
+        s.start()
+        servers[role] = s
+    return servers
 
 
 def main():
