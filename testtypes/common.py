@@ -5,6 +5,7 @@ from core.verdict import PointError, is_number
 
 PROBE_CHECK_MIN_X = 0.5     # steady VDS must be at least 0.5 x the AC peak ...
 PROBE_CHECK_MAX_X = 3.0     # ... and at most 3 x the AC peak
+LOAD_CHECK_PCT = 90.0       # the load must draw at least 90 % of its setting
 
 
 def vds_limit(config):
@@ -75,3 +76,20 @@ def check_steady_output(value, expected_v, trigger_v):
                          f"{0.5 * expected_v:.1f} V and the {trigger_v:.1f} V trigger "
                          f"level (output probe / channel / settings?)")
     return value
+
+
+def check_load_current(measured, expected, min_pct, what):
+    """Rule 6: the e-load must really draw (at least min_pct % of) the expected
+    current. If it doesn't (current limit, the DUT folded back, the input not on,
+    a wiring problem), the test did not load the DUT the way the limits assume,
+    so the result can't be trusted -> ERROR LOAD_NOT_REACHED."""
+    if expected <= 0:
+        return measured                          # nothing to check (no load)
+    if not is_number(measured):
+        raise PointError("NO_READING", f"e-load current: no valid value ({measured!r})")
+    need = expected * float(min_pct) / 100.0
+    if measured < need:
+        raise PointError("LOAD_NOT_REACHED", f"{what}: the load drew {measured:.2f} A on "
+                         f"average, expected {expected:.2f} A (at least {need:.2f} A)",
+                         load_avg_a=round(measured, 3))
+    return measured

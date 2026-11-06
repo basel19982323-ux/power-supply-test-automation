@@ -70,6 +70,8 @@ class Bench:
         self.steady_out = steady_out
         self.ovp_vout = ovp_vout
         self.ovp_vds_factor = ovp_vds_factor
+        self.load = {"input": False, "tran": False, "cc": 0.0, "a": 0.0, "b": 0.0,
+                     "aw": 1.0, "bw": 1.0}   # e-load settings
         self.vdivs = {}              # per-channel volts/div
         self.offsets = {}            # per-channel vertical offset
         self.armed = False
@@ -84,6 +86,17 @@ class Bench:
         self.last_vds = (0.0, 0.0, 0.0, False)
         self.ovp = {"vds": 0.0, "vds_top": 0.0, "vds_clip": False,
                     "vout": 0.0, "vout_top": 0.0}
+
+    def load_current(self):
+        """What the fake e-load draws: the static level, or the time-average of
+        the two transient levels; 0 A with the input off."""
+        ld = self.load
+        if not ld["input"]:
+            return 0.0
+        if ld["tran"]:
+            total = ld["aw"] + ld["bw"]
+            return (ld["a"] * ld["aw"] + ld["b"] * ld["bw"]) / total if total else 0.0
+        return ld["cc"]
 
     def steady_vds(self):
         return self.ac_voltage * 1.41421 + self.reflected
@@ -118,9 +131,33 @@ def ac_handler(bench, cmd):
 
 
 def eload_handler(bench, cmd):
-    if cmd.upper().startswith("*IDN?"):
+    u = cmd.upper()
+    ld = bench.load
+    if u.startswith("*IDN?"):
         return "SIM,ITECH-IT8800,FAKE-BENCH,1.0"
-    return None                                    # accept all load writes
+    if u.startswith("MEAS"):                       # MEASure:CURRent?
+        return f"{bench.load_current():.4f}"
+    if u.startswith("INP"):
+        if u.endswith("?"):
+            return "1" if ld["input"] else "0"
+        ld["input"] = "ON" in u
+        return None
+    if u.startswith("TRAN"):                       # TRANsient ON|OFF
+        ld["tran"] = "ON" in u
+        return None
+    if u.startswith("CURR"):
+        if "ALEV" in u:
+            ld["a"] = last_num(cmd)
+        elif "BLEV" in u:
+            ld["b"] = last_num(cmd)
+        elif "AWID" in u:
+            ld["aw"] = last_num(cmd)
+        elif "BWID" in u:
+            ld["bw"] = last_num(cmd)
+        elif "SLEW" not in u and "MODE" not in u:
+            ld["cc"] = last_num(cmd)               # CURRent {i}: static level
+        return None
+    return None                                    # FUNCtion etc. accepted
 
 
 def scope_handler(bench, cmd):

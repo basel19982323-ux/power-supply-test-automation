@@ -13,6 +13,8 @@ import os
 from core.test_base import Column, Field, Section, TableColumn, TestType
 from core.verdict import StopRunError, is_number, judge_window, rounded
 
+from .common import LOAD_CHECK_PCT, check_load_current, quiet_off
+
 
 class DynamicOutputResponseTest(TestType):
     id = "dynamic_output_response"
@@ -26,6 +28,7 @@ class DynamicOutputResponseTest(TestType):
         Column("ac_condition", "AC condition", "text"),
         Column("i_low_a", "I low (A)", "number", 2),
         Column("i_high_a", "I high (A)", "number", 2),
+        Column("load_avg_a", "Load avg (A)", "number", 2),
         Column("vmax_v", "Vmax (V)", "number", 4),
         Column("vmin_v", "Vmin (V)", "number", 4),
         Column("vmin_limit_v", "Vmin limit", "number", 3),
@@ -37,7 +40,7 @@ class DynamicOutputResponseTest(TestType):
     csv_fields = ["timestamp", "dut", "pd_profile", "ac_condition", "vin_set_v",
                   "freq_hz", "i_low_a", "i_high_a", "vmax_v", "vmin_v",
                   "vmin_limit_v", "vmax_limit_v", "result", "screenshot",
-                  "error_code", "reason"]
+                  "load_avg_a", "error_code", "reason"]
 
     # ---- configuration -------------------------------------------------- #
     def default_config(self) -> dict:
@@ -61,6 +64,7 @@ class DynamicOutputResponseTest(TestType):
                 "transient_frequency_hz": 100,
                 "duty_cycle_pct": 50,
                 "slew_rate_a_per_us": 1.0,
+                "load_check_pct": LOAD_CHECK_PCT,   # measured avg must be >= this %
             },
             "scope_settings": {
                 "vout_channel": 1,
@@ -100,6 +104,8 @@ class DynamicOutputResponseTest(TestType):
                           100, "Hz"),
                     Field("duty_cycle_pct", "Duty cycle", "number", 50, "%"),
                     Field("slew_rate_a_per_us", "Slew rate", "number", 1.0, "A/us"),
+                    Field("load_check_pct", "Load check (min of expected avg)",
+                          "number", LOAD_CHECK_PCT, "%"),
                 ],
             ),
             Section(
@@ -145,6 +151,13 @@ class DynamicOutputResponseTest(TestType):
         instruments["scope"].setup_measurements(config["scope_settings"]["vout_channel"])
 
     def execute_point(self, point, instruments, config, ctx) -> dict:
+        try:
+            return self._measure(point, instruments, config, ctx)
+        except BaseException:
+            quiet_off(ctx, ("turn the e-load off", instruments["e_load"].stop))
+            raise
+
+    def _measure(self, point, instruments, config, ctx) -> dict:
         els = config["e_load_settings"]
         ch = config["scope_settings"]["vout_channel"]
         wait_s = config["scope_settings"]["measure_cycles_wait_s"]
@@ -162,6 +175,15 @@ class DynamicOutputResponseTest(TestType):
         )
         if not ctx.simulate:
             ctx.sleep(wait_s)  # let the transient response stabilize on screen
+
+        # Load check (rule 6): did the load really step up to i_high? The load
+        # reports its AVERAGE current, so compare with the expected average.
+        duty = float(els["duty_cycle_pct"]) / 100.0
+        expected = point["i_low_a"] * (1 - duty) + point["i_high_a"] * duty
+        load_avg = check_load_current(
+            instruments["e_load"].measure_current(), expected,
+            float(els.get("load_check_pct", LOAD_CHECK_PCT)),
+            f"{point['i_low_a']:g}<->{point['i_high_a']:g} A transient")
 
         vmax, vmin = instruments["scope"].read_vmax_vmin(ch)
 
@@ -186,7 +208,7 @@ class DynamicOutputResponseTest(TestType):
 
         return self.make_row(point, config, j.result, j.code, j.reason,
                              vmax_v=rounded(vmax, 4), vmin_v=rounded(vmin, 4),
-                             screenshot=shot_rel)
+                             load_avg_a=rounded(load_avg, 3), screenshot=shot_rel)
 
     # ---- helpers -------------------------------------------------------- #
     def identity(self, point, config):

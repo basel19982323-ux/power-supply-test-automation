@@ -25,6 +25,7 @@ class SimBench:
         #   reading_scale: 10   -> scope readings x10 (probe attenuation set wrong)
         #   scope_nan: true     -> the scope answers "no value" (9.91E37 = NaN) for
         #                          captured / dynamic readings
+        #   load_reach_factor: 0.5     -> the e-load only draws 50 % of its setting
         #   probe_disconnected: true   -> the VDS probe (CH1) reads only noise
         #   scope_never_triggers: true -> the single-shot never fires
         #   scope_not_rearmed: true    -> :STARt is ignored, the old waveform stays
@@ -79,14 +80,19 @@ class SimLoad:
         print(f"[E-load] {self.idn}")
 
     def start_transient(self, i_low, i_high, freq_hz, duty_pct, slew_a_us):
+        d = float(duty_pct) / 100.0
+        self.bench.load_a = float(i_low) * (1 - d) + float(i_high) * d   # average
         print(f"[E-load] (sim) transient {i_low}<->{i_high} A @ {freq_hz} Hz")
 
     def set_cc(self, current):
         self.bench.load_a = float(current)
         print(f"[E-load] (sim) static CC {current} A")
 
+    def measure_current(self):
+        return self.bench.load_a * float(self.bench.faults.get("load_reach_factor", 1.0))
+
     def stop(self):
-        pass
+        self.bench.load_a = 0.0
 
     def close(self):
         pass

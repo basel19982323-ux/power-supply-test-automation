@@ -19,8 +19,9 @@ import os
 from core.test_base import Column, Field, Section, TableColumn, TestType
 from core.verdict import PointError, judge_upper, rounded
 
-from .common import (PROBE_CHECK_MAX_X, PROBE_CHECK_MIN_X, check_steady_output,
-                     check_steady_vds, clip_check, quiet_off, vds_limit)
+from .common import (LOAD_CHECK_PCT, PROBE_CHECK_MAX_X, PROBE_CHECK_MIN_X,
+                     check_load_current, check_steady_output, check_steady_vds,
+                     clip_check, quiet_off, vds_limit)
 
 
 class VDSOVPTest(TestType):
@@ -202,6 +203,10 @@ class VDSOVPTest(TestType):
         if not ctx.simulate:
             ctx.sleep(settle)
 
+        # Load check: the static load really draws its current (before the event).
+        check_load_current(eload.measure_current(), load_a,
+                           float(config["load"].get("check_pct", LOAD_CHECK_PCT)),
+                           f"{load_a:g} A static load")
         # Probe checks before the event (rule 4): VDS on CH1, the output on CH2.
         steady = check_steady_vds(scope.measure_max(vds_ch), point["ac_voltage"], sc)
         check_steady_output(scope.measure_max(vout_ch), steady_out, trig_level)

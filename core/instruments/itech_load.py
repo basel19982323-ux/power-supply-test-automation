@@ -10,6 +10,8 @@ the model.
 """
 import time
 
+from .replies import parse_number
+
 CMDS = {
     "mode_cc": "FUNCtion CURRent",
     "cc_level": "CURRent {i}",                    # static CC current level (A)
@@ -23,6 +25,7 @@ CMDS = {
     "tran_off": "TRANsient OFF",
     "input_on": "INPut ON",
     "input_off": "INPut OFF",
+    "meas_curr": "MEASure:CURRent?",             # measured input current (A)
 }
 
 
@@ -63,6 +66,14 @@ class ITechLoad:
         w(CMDS["cc_level"].format(i=current))
         w(CMDS["input_on"])
         print(f"[E-load] static CC {current} A")
+
+    def measure_current(self):
+        """The current the load really draws, in A. In transient mode this is
+        the AVERAGE over the load's measuring window (the load cannot report
+        the peak of each step), so the test compares it with the expected
+        average current."""
+        return parse_number(self.inst.query(CMDS["meas_curr"]), unit="A",
+                            what="e-load measured current")
 
     def stop(self):
         self.inst.write(CMDS["tran_off"])
