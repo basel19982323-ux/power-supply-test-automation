@@ -1,5 +1,9 @@
 # Power Supply Test Automation
 
+[![tests](https://github.com/basel19982323-ux/power-supply-test-automation/actions/workflows/tests.yml/badge.svg)](https://github.com/basel19982323-ux/power-supply-test-automation/actions/workflows/tests.yml)
+
+CI runs with simulated instruments only.
+
 **Dynamic Load Test** is a Windows desktop application that automates electrical verification tests on
 power supplies (AC-DC adapters, USB-C PD chargers, flyback converters). It controls the bench
 instruments over SCPI/VISA, runs the test matrix hands-off, judges every point PASS/FAIL against
