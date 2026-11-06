@@ -25,6 +25,7 @@ class SimBench:
         #   reading_scale: 10   -> scope readings x10 (probe attenuation set wrong)
         #   scope_nan: true     -> the scope answers "no value" (9.91E37 = NaN) for
         #                          captured / dynamic readings
+        #   probe_disconnected: true   -> the VDS probe (CH1) reads only noise
         #   scope_never_triggers: true -> the single-shot never fires
         #   scope_not_rearmed: true    -> :STARt is ignored, the old waveform stays
         #   scope_max_top: 500  -> the scope can't show more than 500 V full-scale
@@ -215,6 +216,8 @@ class SimScope:
         else:                                           # pre-arm steady
             true_val = self.bench.steady_out if ch == 2 else self._steady_vds()
 
+        if self.bench.faults.get("probe_disconnected") and ch == 1:
+            true_val = 0.3                                # noise on an open probe
         top = self._v_top.get(ch, 1e12)
         clipped = true_val > top
         val = min(true_val, top)

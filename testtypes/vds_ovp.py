@@ -17,9 +17,10 @@ the trigger condition and that the event is operator-initiated.
 import os
 
 from core.test_base import Column, Field, Section, TableColumn, TestType
-from core.verdict import PointError, is_number, judge_upper, rounded
+from core.verdict import PointError, judge_upper, rounded
 
-from .common import clip_check, quiet_off, vds_limit
+from .common import (PROBE_CHECK_MAX_X, PROBE_CHECK_MIN_X, check_steady_output,
+                     check_steady_vds, clip_check, quiet_off, vds_limit)
 
 
 class VDSOVPTest(TestType):
@@ -74,6 +75,8 @@ class VDSOVPTest(TestType):
                 "trigger_timeout_s": 10.0,
                 "max_retries": 2,
                 "settle_s": 2.0,
+                "probe_check_min_x": PROBE_CHECK_MIN_X,  # steady VDS vs AC peak
+                "probe_check_max_x": PROBE_CHECK_MAX_X,
             },
             "limits": {
                 "fet_vds_rating_v": 650.0,
@@ -117,6 +120,10 @@ class VDSOVPTest(TestType):
                     Field("trigger_timeout_s", "Trigger timeout", "number", 10.0, "s"),
                     Field("max_retries", "Max auto-range retries", "int", 2, ""),
                     Field("settle_s", "DUT settle after AC on", "number", 2.0, "s"),
+                    Field("probe_check_min_x", "Probe check: min VDS", "number",
+                          PROBE_CHECK_MIN_X, "x AC peak"),
+                    Field("probe_check_max_x", "Probe check: max VDS", "number",
+                          PROBE_CHECK_MAX_X, "x AC peak"),
                 ],
             ),
             Section(
@@ -195,10 +202,9 @@ class VDSOVPTest(TestType):
         if not ctx.simulate:
             ctx.sleep(settle)
 
-        steady = scope.measure_max(vds_ch)                 # steady VDS (auto-range)
-        if not is_number(steady):
-            raise PointError("NO_READING", f"steady-state VDS: the scope gave no valid "
-                             f"value ({steady!r}); the bench was turned off")
+        # Probe checks before the event (rule 4): VDS on CH1, the output on CH2.
+        steady = check_steady_vds(scope.measure_max(vds_ch), point["ac_voltage"], sc)
+        check_steady_output(scope.measure_max(vout_ch), steady_out, trig_level)
         target_top = max(steady * headroom, limit_v * 1.1, steady * 1.2)
 
         vds_max, vout_ovp, clipped, retries = steady, steady_out, True, 0

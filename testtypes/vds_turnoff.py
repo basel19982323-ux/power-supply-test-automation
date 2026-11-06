@@ -18,9 +18,10 @@ test does not control a load.
 import os
 
 from core.test_base import Column, Field, Section, TableColumn, TestType
-from core.verdict import PointError, is_number, judge_upper
+from core.verdict import PointError, judge_upper
 
-from .common import clip_check, quiet_off, vds_limit
+from .common import (PROBE_CHECK_MAX_X, PROBE_CHECK_MIN_X, check_steady_vds,
+                     clip_check, quiet_off, vds_limit)
 
 
 class VDSTurnoffTest(TestType):
@@ -71,6 +72,8 @@ class VDSTurnoffTest(TestType):
                 "trigger_timeout_s": 5.0,
                 "max_retries": 3,
                 "settle_s": 2.0,             # DUT stabilize time after AC on
+                "probe_check_min_x": PROBE_CHECK_MIN_X,  # steady VDS vs AC peak
+                "probe_check_max_x": PROBE_CHECK_MAX_X,
             },
             "limits": {
                 "fet_vds_rating_v": 650.0,
@@ -106,6 +109,10 @@ class VDSTurnoffTest(TestType):
                     Field("trigger_timeout_s", "Trigger timeout", "number", 5.0, "s"),
                     Field("max_retries", "Max auto-range retries", "int", 3, ""),
                     Field("settle_s", "DUT settle after AC on", "number", 2.0, "s"),
+                    Field("probe_check_min_x", "Probe check: min VDS", "number",
+                          PROBE_CHECK_MIN_X, "x AC peak"),
+                    Field("probe_check_max_x", "Probe check: max VDS", "number",
+                          PROBE_CHECK_MAX_X, "x AC peak"),
                 ],
             ),
             Section(
@@ -174,12 +181,7 @@ class VDSTurnoffTest(TestType):
                 ctx.sleep(settle)
 
         def measure_steady():
-            value = scope.measure_max(ch)
-            if not is_number(value):
-                raise PointError("NO_READING", f"steady-state VDS: the scope gave no "
-                                 f"valid value ({value!r}); AC was turned off without "
-                                 f"a capture")
-            return value
+            return check_steady_vds(scope.measure_max(ch), point["ac_voltage"], sc)
 
         establish_ac()
         steady = measure_steady()
