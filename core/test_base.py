@@ -14,6 +14,7 @@ runner, persistence, and reporting all stay generic:
 Adding a new test = writing one module implementing this interface and
 registering it. No GUI, runner, or reporting code changes.
 """
+import time
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Callable
@@ -75,6 +76,10 @@ class RunContext:
     simulate: bool
     prompt: Callable[[str], None]       # blocks until operator confirms; may raise
     status: Callable[[str], None]       # emit a human-readable progress line
+    # Wait N seconds, but raise AbortError as soon as the operator presses Stop.
+    sleep: Callable[[float], None] = time.sleep
+    # Raise AbortError if the operator has pressed Stop (call it inside long waits).
+    check_stop: Callable[[], None] = lambda: None
 
 
 @dataclass

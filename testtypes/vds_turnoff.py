@@ -142,8 +142,6 @@ class VDSTurnoffTest(TestType):
                               float(sc.get("zoom_position_s", 0.0)))
 
     def execute_point(self, point, instruments, config, ctx) -> dict:
-        import time
-
         ac = instruments["ac_source"]
         scope = instruments["scope"]
         sc = config["scope"]
@@ -162,7 +160,7 @@ class VDSTurnoffTest(TestType):
         def establish_ac():
             ac.apply(point["ac_voltage"], point["ac_frequency"])
             if not ctx.simulate:
-                time.sleep(settle)
+                ctx.sleep(settle)
 
         establish_ac()
         steady = scope.measure_max(ch)

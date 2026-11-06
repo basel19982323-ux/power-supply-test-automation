@@ -24,6 +24,7 @@ def _build_sim(roles, config):
         steady_out=sim.get("steady_out", 20.0),
         ovp_vout=sim.get("ovp_vout", 28.0),
         ovp_vds_factor=sim.get("ovp_vds_factor", 1.3),
+        faults=sim,
     )
     factories = {
         "ac_source": lambda: SimACSource(bench),

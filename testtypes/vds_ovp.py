@@ -162,8 +162,6 @@ class VDSOVPTest(TestType):
         scope.set_vertical(vout_ch, full / divs, offset=full / 2.0)
 
     def execute_point(self, point, instruments, config, ctx) -> dict:
-        import time
-
         ac = instruments["ac_source"]
         eload = instruments["e_load"]
         scope = instruments["scope"]
@@ -185,7 +183,7 @@ class VDSOVPTest(TestType):
         ac.apply(point["ac_voltage"], point["ac_frequency"])
         eload.set_cc(load_a)
         if not ctx.simulate:
-            time.sleep(settle)
+            ctx.sleep(settle)
 
         steady = scope.measure_max(vds_ch)                 # steady VDS (auto-range)
         target_top = max(steady * headroom, limit_v * 1.1, steady * 1.2)

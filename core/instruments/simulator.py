@@ -19,7 +19,10 @@ class SimBench:
 
     def __init__(self, wobble_pct=2.0, fault_profiles=None,
                  vds_reflected=100.0, vds_spike_factor=1.2,
-                 steady_out=20.0, ovp_vout=28.0, ovp_vds_factor=1.3):
+                 steady_out=20.0, ovp_vout=28.0, ovp_vds_factor=1.3, faults=None):
+        # Fault switches for tests (the config's `simulation:` section), e.g.
+        #   reading_scale: 10   -> scope readings x10 (probe attenuation set wrong)
+        self.faults = dict(faults or {})
         # Dynamic Output Response test
         self.pd_voltage = 5.0
         self.wobble_pct = wobble_pct
@@ -114,8 +117,9 @@ class SimScope:
         for label in self.bench.fault_profiles:
             if abs(self._label_to_v(label) - v) < 1e-6:
                 swing = 0.10
-        vmax = v * (1 + swing)
-        vmin = v * (1 - swing)
+        scale = float(self.bench.faults.get("reading_scale", 1.0))
+        vmax = v * (1 + swing) * scale
+        vmin = v * (1 - swing) * scale
         self._last = (vmax, vmin, channel)
         print(f"[Scope] (sim) CH{channel}: Vmax={vmax:.4f} V, Vmin={vmin:.4f} V")
         return vmax, vmin

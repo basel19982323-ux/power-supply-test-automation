@@ -44,6 +44,51 @@ NOT_RUN_CODES = {
 _COUNT_KEY = {PASS: "pass", FAIL: "fail", ERROR: "error", NOT_RUN: "not_run"}
 
 
+# --------------------------------------------------------------------------- #
+# Errors with a fixed code
+# --------------------------------------------------------------------------- #
+class CodedError(Exception):
+    """An error that already knows its fixed code and its reason. `values` are
+    measured numbers worth keeping in the ERROR row (for example the insane
+    reading that caused a sanity abort)."""
+
+    def __init__(self, code, reason, **values):
+        super().__init__(f"{code}: {reason}")
+        self.code = code
+        self.reason = reason
+        self.values = values
+
+
+class PointError(CodedError):
+    """This point's measurement can't be trusted, but the bench is in a known,
+    safe state: record ERROR for this point and continue with the next one."""
+
+
+class StopRunError(CodedError):
+    """The bench itself can't be trusted (sanity abort, lost instrument, ...):
+    record ERROR for this point, NOT RUN for the rest, and shut the bench down."""
+
+
+# Text that pyvisa puts in its error messages for a lost or missing connection.
+_CONNECTION_MARKERS = ("VI_ERROR_CONN_LOST", "VI_ERROR_RSRC_NFOUND", "VI_ERROR_IO",
+                       "VI_ERROR_RSRC_BUSY", "VI_ERROR_INV_OBJECT", "VI_ERROR_CLOSING_FAILED")
+
+
+def classify_exception(exc):
+    """Map any exception to (code, reason). Used for errors that the test code
+    did not expect, for example a pyvisa timeout or a dropped connection."""
+    if isinstance(exc, CodedError):
+        return exc.code, exc.reason
+    text = str(exc) or type(exc).__name__
+    short = text if len(text) <= 160 else text[:157] + "..."
+    if (isinstance(exc, TimeoutError) or "VI_ERROR_TMO" in text
+            or "timed out" in text.lower()):
+        return "TIMEOUT", f"an instrument did not answer in time ({short})"
+    if isinstance(exc, ConnectionError) or any(m in text for m in _CONNECTION_MARKERS):
+        return "DISCONNECTED", f"the connection to an instrument was lost ({short})"
+    return "INSTRUMENT_ERROR", f"{type(exc).__name__}: {short}"
+
+
 def summarize(rows):
     """Count the results. Anything that is not a known result counts as ERROR,
     so it can never be counted as PASS by accident."""

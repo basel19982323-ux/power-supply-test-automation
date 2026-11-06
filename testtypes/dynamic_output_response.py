@@ -11,6 +11,7 @@ TestType interface: plan() builds the point list, execute_point() runs one point
 import os
 
 from core.test_base import Column, Field, Section, TableColumn, TestType
+from core.verdict import StopRunError
 
 
 class DynamicOutputResponseTest(TestType):
@@ -160,8 +161,7 @@ class DynamicOutputResponseTest(TestType):
             els["slew_rate_a_per_us"],
         )
         if not ctx.simulate:
-            import time
-            time.sleep(wait_s)  # let the transient response stabilize on screen
+            ctx.sleep(wait_s)  # let the transient response stabilize on screen
 
         vmax, vmin = instruments["scope"].read_vmax_vmin(ch)
 
@@ -171,12 +171,15 @@ class DynamicOutputResponseTest(TestType):
         instruments["e_load"].stop()
 
         vmin_l, vmax_l = self._limits(config, point)
-        # Sanity abort: a wildly out-of-range reading means a probe/setup problem.
-        if not ctx.simulate and (vmax > point["pd_voltage"] * 2 or vmin < -1):
-            raise RuntimeError(
-                f"Reading out of sane range (Vmax={vmax}, Vmin={vmin}) - "
-                f"check probe/channel. Aborting for safety."
-            )
+        # Sanity abort: a wildly out-of-range reading means a probe/setup problem,
+        # so the whole run stops and the bench is shut down (rule 7).
+        if vmax > point["pd_voltage"] * 2 or vmin < -1:
+            raise StopRunError(
+                "SANITY_ABORT",
+                f"reading out of sane range (Vmax {vmax:.3f} V, Vmin {vmin:.3f} V for a "
+                f"{point['pd_voltage']:g} V output) - check probe/channel; run stopped "
+                f"for safety",
+                vmax_v=round(vmax, 4), vmin_v=round(vmin, 4), screenshot=shot_rel)
         result = "PASS" if (vmin >= vmin_l and vmax <= vmax_l) else "FAIL"
         ctx.status(f"    limits [{vmin_l:.3f}, {vmax_l:.3f}] V -> {result}")
 
