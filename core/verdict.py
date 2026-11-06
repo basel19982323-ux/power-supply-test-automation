@@ -36,10 +36,16 @@ ERROR_CODES = {
     "INSTRUMENT_ERROR": "an unexpected instrument or software error",
 }
 
+# Fixed short codes for a FAIL that has a special reason.
+FAIL_CODES = {
+    "STEADY_OVER_LIMIT": "the steady-state reading was already above the limit, so "
+                         "the test event was not started and the run was stopped",
+}
+
 # Fixed short codes for NOT RUN.
 NOT_RUN_CODES = {
     "STOPPED": "the operator pressed Stop",
-    "RUN_ENDED_EARLY": "the run stopped earlier because of an ERROR",
+    "RUN_ENDED_EARLY": "the run stopped earlier because of an ERROR or a safety stop",
     "STEP_NOT_LOADED": "the Sequence step's settings could not be loaded",
 }
 
@@ -83,8 +89,13 @@ class PointError(CodedError):
 
 
 class StopRunError(CodedError):
-    """The bench itself can't be trusted (sanity abort, lost instrument, ...):
-    record ERROR for this point, NOT RUN for the rest, and shut the bench down."""
+    """The bench itself can't be trusted (sanity abort, lost instrument, ...),
+    or going on is not safe for the DUT: record `result` (normally ERROR) for
+    this point, NOT RUN for the rest, and shut the bench down."""
+
+    def __init__(self, code, reason, result=ERROR, **values):
+        super().__init__(code, reason, **values)
+        self.result = result
 
 
 # Text that pyvisa puts in its error messages for a lost or missing connection.

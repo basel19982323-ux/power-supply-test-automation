@@ -1,11 +1,16 @@
 """Helpers shared by the V_DS tests (AC turn-off and OVP)."""
 import math
 
-from core.verdict import PointError, is_number
+from core.verdict import FAIL, PointError, StopRunError, is_number
 
 PROBE_CHECK_MIN_X = 0.5     # steady VDS must be at least 0.5 x the AC peak ...
 PROBE_CHECK_MAX_X = 3.0     # ... and at most 3 x the AC peak,
-PROBE_CHECK_MAX_X_RATING = 1.5   # ... but the top is never below 1.5 x the FET rating
+# ... but the top is never below 1.5 x the FET rating. PROVISIONAL: this is
+# only a "is the measurement believable?" threshold for catching a wrong probe
+# setting. It is NOT a safe operating voltage - the pass limit is the derated
+# rating (rating x derating), and a steady reading above THAT limit already
+# stops the run (check_steady_below_limit). Check it on a real bench.
+PROBE_CHECK_MAX_X_RATING = 1.5
 LOAD_CHECK_PCT = 90.0       # the load must draw at least 90 % of its setting
 
 
@@ -53,11 +58,25 @@ def check_steady_vds(value, ac_voltage, scope_cfg, fet_rating_v=0.0):
     Top of the range = the larger of (3 x AC peak) and (1.5 x FET rating).
     At low line the AC peak is small (90 Vac -> 127 V), but the steady peak
     still holds the full reflected voltage and the leakage spike, so 3 x the
-    AC peak alone (382 V) could reject a healthy DUT. A real reading can't be
-    far above the FET rating (the FET would be in avalanche), while a 10x
-    probe-ratio mistake is far above 1.5 x the rating - so it is still caught.
-    A real over-voltage below that top is measured and judged (FAIL), not
-    hidden as ERROR.
+    AC peak alone (382 V) could reject a healthy DUT. The 1.5 x rating part is
+    a PROVISIONAL measurement-check threshold, not a safe voltage (see above).
+
+    Below the range -> ERROR PROBE_CHECK for this point (the run continues).
+    Above the range -> ERROR PROBE_CHECK and the run STOPS: either the probe
+    setting is wrong, or the drain really is far above the FET rating - in both
+    cases no test event may be started on this DUT.
+
+    What a 10x probe-setting mistake looks like (true steady VDS = V):
+      reads 10x too LOW  -> caught whenever V < 5 x AC peak (any healthy flyback)
+      reads 10x too HIGH -> caught whenever V > 0.15 x FET rating
+                            (650 V FET: V > 98 V - always, the bulk alone is
+                            at least ~120 V at 85 Vac). If not caught (a very
+                            high-voltage FET at low line), the reading is still
+                            above the limit, so it is FAIL and the run stops -
+                            never PASS.
+    Not caught: small mistakes such as 2x. A 2x-too-LOW reading can look
+    normal and could PASS a bad DUT - only checking the probe setting by hand
+    (or against a known voltage) catches that.
     """
     if not is_number(value):
         raise PointError("NO_READING", f"steady-state VDS: the scope gave no valid "
@@ -67,12 +86,31 @@ def check_steady_vds(value, ac_voltage, scope_cfg, fet_rating_v=0.0):
     hi = max(float(scope_cfg.get("probe_check_max_x", PROBE_CHECK_MAX_X)) * ac_peak,
              float(scope_cfg.get("probe_check_max_x_rating", PROBE_CHECK_MAX_X_RATING))
              * float(fet_rating_v or 0))
-    if not lo <= value <= hi:
-        hint = ("probe disconnected or wrong channel?" if value < lo
-                else "probe attenuation set wrong?")
+    if value < lo:
         raise PointError("PROBE_CHECK", f"steady-state VDS {value:.1f} V is outside the "
                          f"possible range {lo:.0f}..{hi:.0f} V for {ac_voltage:g} Vac "
-                         f"({hint}); AC was not cut")
+                         f"(probe disconnected or wrong channel?); AC was not cut")
+    if value > hi:
+        raise StopRunError("PROBE_CHECK", f"steady-state VDS {value:.1f} V is outside "
+                           f"the possible range {lo:.0f}..{hi:.0f} V for {ac_voltage:g} "
+                           f"Vac (probe attenuation set wrong, or a real over-voltage?); "
+                           f"no test event was started and the run was stopped")
+    return value
+
+
+def check_steady_below_limit(value, limit_v, event):
+    """The steady VDS is a floor for the event: the peak during AC turn-off or
+    OVP can only be the same or higher. So a steady reading already above the
+    limit proves FAIL. Starting the event would only stress a DUT that has
+    already failed, so: FAIL STEADY_OVER_LIMIT, no event, and the run stops
+    (the next points would power this DUT up again)."""
+    if limit_v > 0 and value > limit_v:
+        raise StopRunError(
+            "STEADY_OVER_LIMIT",
+            f"steady-state VDS {value:.1f} V is already above the {limit_v:.1f} V limit, "
+            f"so VDS max can only be higher. {event} was not done (AC was switched off "
+            f"only to make the DUT safe) and the run was stopped - check the DUT "
+            f"before testing it again", result=FAIL, vds_max_v=f"≥ {value:.1f}")
     return value
 
 

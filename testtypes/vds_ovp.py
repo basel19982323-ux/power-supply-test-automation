@@ -21,7 +21,8 @@ from core.verdict import PointError, judge_upper, rounded
 
 from .common import (LOAD_CHECK_PCT, PROBE_CHECK_MAX_X, PROBE_CHECK_MAX_X_RATING,
                      PROBE_CHECK_MIN_X,
-                     check_load_current, check_steady_output, check_steady_vds,
+                     check_load_current, check_steady_below_limit, check_steady_output,
+                     check_steady_vds,
                      clip_check, quiet_off, vds_limit)
 
 
@@ -127,7 +128,8 @@ class VDSOVPTest(TestType):
                           PROBE_CHECK_MIN_X, "x AC peak"),
                     Field("probe_check_max_x", "Probe check: max VDS", "number",
                           PROBE_CHECK_MAX_X, "x AC peak"),
-                    Field("probe_check_max_x_rating", "Probe check: max VDS at least",
+                    Field("probe_check_max_x_rating",
+                          "Probe check: max VDS at least (check only, not a safe voltage)",
                           "number", PROBE_CHECK_MAX_X_RATING, "x FET rating"),
                 ],
             ),
@@ -193,6 +195,10 @@ class VDSOVPTest(TestType):
 
         rating, _, limit_v = vds_limit(config)
 
+        if not limit_v > 0:
+            raise PointError("BAD_CONFIG", "no valid FET VDS rating / derating, so "
+                             "there is no limit to test against; AC was not applied")
+
         steady_out = float(sc.get("vout_steady_v", 20.0))
         trig_level = float(sc.get("vout_trigger_level_v", 22.0))
         headroom = float(sc.get("vertical_headroom_x", 2.0))
@@ -214,6 +220,7 @@ class VDSOVPTest(TestType):
         # Probe checks before the event (rule 4): VDS on CH1, the output on CH2.
         steady = check_steady_vds(scope.measure_max(vds_ch), point["ac_voltage"], sc,
                                   rating)
+        check_steady_below_limit(steady, limit_v, "Breaking the feedback loop")
         check_steady_output(scope.measure_max(vout_ch), steady_out, trig_level)
         target_top = max(steady * headroom, limit_v * 1.1, steady * 1.2)
 

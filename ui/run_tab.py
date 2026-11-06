@@ -274,7 +274,7 @@ class RunTab(QWidget):
                         "  • Turn ON Simulation mode to run with no hardware.\n"
                         "  • Start tools/fake_bench.py and click 'Use fake bench' on "
                         "the Instruments tab (Simulation OFF).")
-            QMessageBox.critical(self, "Run error", msg)
+            QMessageBox.critical(self, "Run stopped", msg)
         elif result.aborted:
             self._on_status("Run aborted. Partial results saved.")
         self._on_status(f"Done: {counts_text(s)}. Overall result: {result.overall}")

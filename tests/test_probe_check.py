@@ -6,7 +6,7 @@ import testtypes
 from core.instruments.factory import build_instruments
 from core.runner import run_test
 from core.test_base import RunContext
-from core.verdict import ERROR, PointError
+from core.verdict import ERROR, PointError, StopRunError
 from testtypes.common import check_steady_output, check_steady_vds
 
 
@@ -23,19 +23,23 @@ def test_possible_steady_vds_passes_the_check(value):
     assert check_steady_vds(value, 230, {}) == value
 
 
-@pytest.mark.parametrize("value, hint", [
-    (0.3, "probe disconnected"),      # about 0 V: probe not connected
-    (100.0, "probe disconnected"),    # below the bulk voltage: impossible while running
-    (4730.0, "attenuation"),          # 10x too high: probe ratio set wrong
-])
-def test_impossible_steady_vds_is_probe_check(value, hint):
+@pytest.mark.parametrize("value", [0.3, 100.0])   # ~0 V / below the bulk voltage
+def test_too_low_steady_vds_is_probe_check_and_the_run_continues(value):
     with pytest.raises(PointError) as e:
         check_steady_vds(value, 230, {})
-    assert e.value.code == "PROBE_CHECK" and hint in e.value.reason
+    assert e.value.code == "PROBE_CHECK" and "probe disconnected" in e.value.reason
+
+
+def test_too_high_steady_vds_is_probe_check_and_stops_the_run():
+    # 10x too high (probe ratio set wrong) - or a real over-voltage: no event at all.
+    with pytest.raises(StopRunError) as e:
+        check_steady_vds(4730.0, 230, {})
+    assert e.value.code == "PROBE_CHECK" and e.value.result == ERROR
+    assert "attenuation" in e.value.reason
 
 
 def test_probe_check_limits_come_from_the_config():
-    with pytest.raises(PointError):
+    with pytest.raises(StopRunError):
         check_steady_vds(473.0, 230, {"probe_check_max_x": 1.2})   # 473 > 1.2 x 325
 
 
@@ -47,24 +51,25 @@ def test_healthy_low_line_dut_is_not_stopped_by_the_probe_check():
 
 
 def test_without_a_rating_the_old_3x_top_still_applies():
-    with pytest.raises(PointError) as e:
+    with pytest.raises(StopRunError) as e:
         check_steady_vds(387.0, 90, {})
     assert e.value.code == "PROBE_CHECK"
 
 
 def test_ten_times_probe_mistake_at_low_line_is_still_caught():
-    with pytest.raises(PointError) as e:
+    with pytest.raises(StopRunError) as e:
         check_steady_vds(2500.0, 90, {}, fet_rating_v=650.0)   # real 250 V read as 2500 V
     assert e.value.code == "PROBE_CHECK" and "attenuation" in e.value.reason
 
 
-def test_a_real_overvoltage_below_the_top_is_measured_not_hidden():
-    # 700 V is above the 585 V limit: it must go on to be judged FAIL, not ERROR.
+def test_a_real_overvoltage_below_the_top_passes_the_probe_check():
+    # 700 V is believable as a measurement; the LIMIT check then makes it FAIL
+    # (see tests/test_steady_over_limit.py), so it is not hidden as ERROR.
     assert check_steady_vds(700.0, 90, {}, fet_rating_v=650.0) == 700.0
 
 
 def test_rating_factor_comes_from_the_config():
-    with pytest.raises(PointError):
+    with pytest.raises(StopRunError):
         check_steady_vds(700.0, 90, {"probe_check_max_x_rating": 1.0}, fet_rating_v=650.0)
 
 

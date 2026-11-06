@@ -116,11 +116,12 @@ def run_test(test, config, *, simulate=False, callbacks=None,
             not_run_from(plan, i, "STOPPED", "not measured: the operator pressed Stop")
         except Exception as e:  # noqa: BLE001 - capture, don't crash the UI thread
             code, reason = classify_exception(e)
+            result = getattr(e, "result", ERROR)    # a safety stop can be a FAIL
             error = f"{code}: {reason}"
-            ctx.status(f"ERROR {error}")
+            ctx.status(f"{result} {error}")
             if plan:
                 values = getattr(e, "values", {})
-                record(i, _safe_row(test, plan[i], config, ERROR, code, reason, values))
+                record(i, _safe_row(test, plan[i], config, result, code, reason, values))
                 not_run_from(plan, i + 1, "RUN_ENDED_EARLY",
                              f"not measured: the run stopped after {code} on point {i + 1}")
     finally:

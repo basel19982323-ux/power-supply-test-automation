@@ -32,7 +32,10 @@ copying them into a report.
 - **PASS/FAIL against derated limits**: the MOSFET V<sub>DS</sub> rating can be typed in or
   extracted from the component's datasheet PDF, then derated by a set margin.
 - **Safety behaviour**: AC output off between conditions, load input off after each point, and an
-  abort if a reading is far out of range (for example a bad probe).
+  abort if a reading is far out of range (for example a bad probe). Before the AC is cut or the
+  feedback is broken, the steady V<sub>DS</sub> is checked: impossible values are ERROR, and a
+  value already above the limit is FAIL with no test event and the run stopped. The
+  "1.5 × FET rating" top of the probe check is a provisional measurement check, not a safe voltage.
 - **Pluggable test framework**: a new test type is one class; the GUI, runner, sequencing and
   reporting pick it up automatically.
 - **Testable without hardware**: a simulation mode, plus a fake bench that speaks SCPI over TCP so the

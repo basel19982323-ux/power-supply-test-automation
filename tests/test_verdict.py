@@ -6,8 +6,10 @@ import pytest
 import testtypes
 from core.results import read_csv
 from core.runner import run_test
-from core.verdict import (ERROR, ERROR_CODES, FAIL, NOT_RUN, NOT_RUN_CODES, PASS,
-                          combine, overall, summarize)
+from core.verdict import (ERROR, ERROR_CODES, FAIL, FAIL_CODES, NOT_RUN, NOT_RUN_CODES,
+                          PASS, combine, overall, summarize)
+
+ALL_CODES = {**ERROR_CODES, **FAIL_CODES, **NOT_RUN_CODES}
 
 
 def rows(*results):
@@ -42,7 +44,7 @@ def test_run_error_makes_the_run_error_unless_something_failed():
 
 
 def test_error_codes_are_fixed_short_names_with_a_meaning():
-    for code, meaning in {**ERROR_CODES, **NOT_RUN_CODES}.items():
+    for code, meaning in ALL_CODES.items():
         assert re.fullmatch(r"[A-Z_]+", code), code
         assert meaning, code
 
@@ -71,4 +73,4 @@ def test_every_code_used_in_the_code_is_a_known_fixed_code():
             for m in pattern.finditer(path.read_text(encoding="utf-8")):
                 used.add(m.group(1) or m.group(2))
     assert len(used) >= 8                       # the scan really found the codes
-    assert used <= set(ERROR_CODES) | set(NOT_RUN_CODES), used - set(ERROR_CODES)
+    assert used <= set(ALL_CODES), used - set(ALL_CODES)

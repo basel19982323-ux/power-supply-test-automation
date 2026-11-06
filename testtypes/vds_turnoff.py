@@ -21,7 +21,7 @@ from core.test_base import Column, Field, Section, TableColumn, TestType
 from core.verdict import PointError, judge_upper
 
 from .common import (PROBE_CHECK_MAX_X, PROBE_CHECK_MAX_X_RATING,
-                     PROBE_CHECK_MIN_X, check_steady_vds,
+                     PROBE_CHECK_MIN_X, check_steady_below_limit, check_steady_vds,
                      clip_check, quiet_off, vds_limit)
 
 
@@ -115,7 +115,8 @@ class VDSTurnoffTest(TestType):
                           PROBE_CHECK_MIN_X, "x AC peak"),
                     Field("probe_check_max_x", "Probe check: max VDS", "number",
                           PROBE_CHECK_MAX_X, "x AC peak"),
-                    Field("probe_check_max_x_rating", "Probe check: max VDS at least",
+                    Field("probe_check_max_x_rating",
+                          "Probe check: max VDS at least (check only, not a safe voltage)",
                           "number", PROBE_CHECK_MAX_X_RATING, "x FET rating"),
                 ],
             ),
@@ -184,9 +185,13 @@ class VDSTurnoffTest(TestType):
             if not ctx.simulate:
                 ctx.sleep(settle)
 
+        if not limit_v > 0:
+            raise PointError("BAD_CONFIG", "no valid FET VDS rating / derating, so "
+                             "there is no limit to test against; AC was not applied")
+
         def measure_steady():
-            return check_steady_vds(scope.measure_max(ch), point["ac_voltage"], sc,
-                                    rating)
+            v = check_steady_vds(scope.measure_max(ch), point["ac_voltage"], sc, rating)
+            return check_steady_below_limit(v, limit_v, "Cutting the AC as a test event")
 
         establish_ac()
         steady = measure_steady()
