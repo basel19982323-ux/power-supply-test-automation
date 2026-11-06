@@ -62,6 +62,12 @@ def block(data):
 FAULTS = {
     "ac_ignores_off": "the AC source accepts 'OUTPut OFF' but its output stays ON "
                       "(like a source left in local/front-panel mode)",
+    # communication faults
+    "ac_no_reply_once": "the AC source does not answer its next MEASure? query "
+                        "(once), so the driver's read times out",
+    "scope_garbage_reply": "the scope answers 'ABC' to measurement queries",
+    "scope_wrong_unit": "the scope answers in amps, e.g. '5.680E+02A' (CH1 set to a "
+                        "current probe by mistake)",
 }
 
 # Read-back queries that CONFIRM an instrument is off, and its OFF command.
@@ -84,6 +90,7 @@ class Bench:
             raise ValueError(f"unknown fake-bench fault(s): {sorted(unknown)}; "
                              f"known: {sorted(FAULTS)}")
         self.faults = dict(faults or {})
+        self.faults_used = set()     # one-time faults that already happened
         self.log = []
         self._log_lock = threading.Lock()
         self.ac_voltage = 0.0
@@ -111,6 +118,13 @@ class Bench:
         self.last_vds = (0.0, 0.0, 0.0, False)
         self.ovp = {"vds": 0.0, "vds_top": 0.0, "vds_clip": False,
                     "vout": 0.0, "vout_top": 0.0}
+
+    def fault_once(self, name):
+        """True the first time a one-time fault applies, then False."""
+        if self.faults.get(name) and name not in self.faults_used:
+            self.faults_used.add(name)
+            return True
+        return False
 
     def record(self, role, cmd, reply):
         with self._log_lock:
@@ -167,6 +181,8 @@ def ac_handler(bench, cmd):
     if u.startswith("*RST") or u.startswith("*CLS"):
         return None
     if u.startswith("MEAS"):                       # MEASure:VOLTage?
+        if bench.fault_once("ac_no_reply_once"):
+            return None                            # no answer -> the driver times out
         return f"{(bench.ac_voltage if bench.ac_on else 0.0):.3f}"
     if u.startswith("OUTP"):
         if u.endswith("?"):                        # OUTPut? (confirm on/off)
@@ -284,6 +300,10 @@ def scope_handler(bench, cmd):
         return "1" if running else "0"
     if ":MEAS" in u:
         if "MAX" in u and "VAL" in u:
+            if bench.faults.get("scope_garbage_reply"):
+                return "ABC"
+            if bench.faults.get("scope_wrong_unit"):
+                return f"{_scope_max(bench, chan_of(u)):.3E}A"
             return f"{_scope_max(bench, chan_of(u)):.4f}"
         if "MIN" in u and "VAL" in u:
             return f"{bench.pd_nominal * 0.98:.4f}"
