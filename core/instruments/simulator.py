@@ -25,6 +25,9 @@ class SimBench:
         #   reading_scale: 10   -> scope readings x10 (probe attenuation set wrong)
         #   scope_nan: true     -> the scope answers "no value" (9.91E37 = NaN) for
         #                          captured / dynamic readings
+        #   ac_off_unconfirmed: true   -> the AC source still says ON after OFF
+        #   disconnect_ac_after: 2     -> the AC source connection is lost after
+        #                                 2 commands (every later call fails)
         #   load_reach_factor: 0.5     -> the e-load only draws 50 % of its setting
         #   probe_disconnected: true   -> the VDS probe (CH1) reads only noise
         #   scope_never_triggers: true -> the single-shot never fires
@@ -55,17 +58,30 @@ class SimACSource:
     def __init__(self, bench):
         self.bench = bench
         self.idn = "SIM,ITECH-AC,0,1.0"
+        self.commands = []          # every command, so tests can check them
         print(f"[AC source] {self.idn}")
 
+    def _send(self, cmd):
+        limit = self.bench.faults.get("disconnect_ac_after")
+        if limit is not None and len(self.commands) >= int(limit):
+            raise ConnectionResetError("VI_ERROR_CONN_LOST: (sim) AC source disconnected")
+        self.commands.append(cmd)
+
     def apply(self, voltage, frequency, settle_s=2.0):
+        self._send(f"APPLY {voltage} {frequency}")
         self.bench.ac_voltage = float(voltage)
         self.bench.ac_on = True
         print(f"[AC source] (sim) set {voltage} V / {frequency} Hz")
         return float(voltage)
 
     def off(self):
+        self._send("OUTP OFF")
         self.bench.ac_on = False
         print("[AC source] (sim) output OFF")
+
+    def output_is_on(self):
+        self._send("OUTP?")
+        return bool(self.bench.ac_on or self.bench.faults.get("ac_off_unconfirmed"))
 
     def close(self):
         pass
@@ -82,10 +98,12 @@ class SimLoad:
     def start_transient(self, i_low, i_high, freq_hz, duty_pct, slew_a_us):
         d = float(duty_pct) / 100.0
         self.bench.load_a = float(i_low) * (1 - d) + float(i_high) * d   # average
+        self.bench.load_on = True
         print(f"[E-load] (sim) transient {i_low}<->{i_high} A @ {freq_hz} Hz")
 
     def set_cc(self, current):
         self.bench.load_a = float(current)
+        self.bench.load_on = True
         print(f"[E-load] (sim) static CC {current} A")
 
     def measure_current(self):
@@ -93,6 +111,10 @@ class SimLoad:
 
     def stop(self):
         self.bench.load_a = 0.0
+        self.bench.load_on = False
+
+    def input_is_on(self):
+        return bool(getattr(self.bench, "load_on", False))
 
     def close(self):
         pass

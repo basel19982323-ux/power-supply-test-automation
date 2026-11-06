@@ -281,6 +281,8 @@ class RunTab(QWidget):
         else:
             self._on_status(f"Done: {s['pass']} PASS / {s['fail']} FAIL of {s['total']}.")
         self._on_status(f"Output folder: {result.run_dir}")
+        if result.warnings:                    # safety first: AC/load not confirmed off
+            QMessageBox.warning(self, "Bench may still be ON", "\n\n".join(result.warnings))
 
         self._thread.quit()
         self._thread.wait()

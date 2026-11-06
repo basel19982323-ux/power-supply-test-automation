@@ -60,6 +60,8 @@ def main(argv=None):
     print(f"\nRun folder: {result.run_dir}")
     s = result.summary
     print(f"Summary: {s['pass']} PASS / {s['fail']} FAIL of {s['total']}")
+    for w in result.warnings:              # safety: AC / load not confirmed off
+        print(f"\n!!! {w}", file=sys.stderr)
     if result.error:
         print(f"Ended with error: {result.error}")
         return 2

@@ -25,6 +25,7 @@ import threading
 
 from .instruments.factory import build_instruments
 from .results import new_run_dir, write_csv
+from .shutdown import shutdown_bench
 from .test_base import AbortError, Callbacks, RunContext
 from .verdict import (ERROR, NOT_RUN, PointError, classify_exception,
                       overall as overall_result)
@@ -32,13 +33,15 @@ from .verdict import (ERROR, NOT_RUN, PointError, classify_exception,
 
 class RunResult:
     def __init__(self, run_dir, csv_path, rows, summary,
-                 aborted=False, error=None, overall=None):
+                 aborted=False, error=None, overall=None, warnings=None):
         self.run_dir = run_dir
         self.csv_path = csv_path
         self.rows = rows
         self.summary = summary        # counts: total / pass / fail / error / not_run
         self.aborted = aborted        # True if the operator pressed Stop
         self.error = error            # "CODE: reason" if the run stopped on an error
+        # Safety warnings from the shutdown, e.g. "AC could NOT be confirmed OFF"
+        self.warnings = list(warnings or [])
         # PASS / FAIL / ERROR / NOT RUN for the whole run (see core.verdict)
         self.overall = overall if overall is not None else overall_result(rows, error)
 
@@ -69,6 +72,7 @@ def run_test(test, config, *, simulate=False, callbacks=None,
     error = None
     aborted = False
     instruments = {}
+    warnings = []
 
     def record(index, row):
         rows.append(row)
@@ -122,13 +126,10 @@ def run_test(test, config, *, simulate=False, callbacks=None,
     finally:
         try:
             test.finish(instruments, config, ctx)
-        except Exception:
-            pass
-        for dev in instruments.values():
-            try:
-                dev.close()
-            except Exception:
-                pass
+        except Exception as e:  # noqa: BLE001
+            ctx.status(f"    test teardown failed: {type(e).__name__}: {e}")
+        # Load off, AC off, confirm, close - every instrument is tried (rule 8).
+        warnings = shutdown_bench(instruments, ctx.status)
         fields = test.csv_fields or [c.key for c in test.result_columns]
         write_csv(csv_path, fields, rows)
         s = test.summarize(rows)
@@ -136,7 +137,7 @@ def run_test(test, config, *, simulate=False, callbacks=None,
                    f"{s['fail']} FAIL / {s['error']} ERROR / {s['not_run']} NOT RUN)")
 
     return RunResult(run_dir, csv_path, rows, test.summarize(rows),
-                     aborted=aborted, error=error)
+                     aborted=aborted, error=error, warnings=warnings)
 
 
 def _safe_row(test, point, config, result, code, reason, values=None):

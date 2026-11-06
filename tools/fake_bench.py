@@ -119,6 +119,8 @@ def ac_handler(bench, cmd):
     if u.startswith("MEAS"):                       # MEASure:VOLTage?
         return f"{(bench.ac_voltage if bench.ac_on else 0.0):.3f}"
     if u.startswith("OUTP"):
+        if u.endswith("?"):                        # OUTPut? (confirm on/off)
+            return "1" if bench.ac_on else "0"
         bench.ac_on = "ON" in u
         return None
     if u.startswith("VOLT"):

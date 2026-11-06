@@ -6,7 +6,7 @@ check that model's programming manual and adjust CMDS only.
 """
 import time
 
-from .replies import parse_number
+from .replies import parse_number, parse_on_off
 
 CMDS = {
     "set_voltage": "VOLTage {v}",
@@ -14,6 +14,7 @@ CMDS = {
     "output_on": "OUTPut ON",
     "output_off": "OUTPut OFF",
     "measure_voltage": "MEASure:VOLTage?",
+    "output_q": "OUTPut?",
 }
 
 
@@ -42,6 +43,10 @@ class ITechACSource:
 
     def off(self):
         self.inst.write(CMDS["output_off"])
+
+    def output_is_on(self):
+        """Ask the source whether its output is on (used to CONFIRM AC off)."""
+        return parse_on_off(self.inst.query(CMDS["output_q"]), what="AC source output")
 
     def close(self):
         try:

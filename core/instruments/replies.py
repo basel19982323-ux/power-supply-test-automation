@@ -24,6 +24,17 @@ _REPLY = re.compile(
 _SCPI_NO_VALUE = 9.9e37   # SCPI uses 9.91E37 for NaN and 9.9E37 for infinity
 
 
+def parse_on_off(reply, what="state"):
+    """'1' / 'ON' -> True, '0' / 'OFF' -> False; anything else is BAD_REPLY."""
+    text = "" if reply is None else str(reply).strip().upper()
+    if text in ("1", "ON"):
+        return True
+    if text in ("0", "OFF"):
+        return False
+    raise StopRunError("BAD_REPLY", f"{what}: the instrument answered {text!r}, "
+                                    f"expected ON/OFF")
+
+
 def parse_number(reply, unit=None, what="reading"):
     """Return the reply as a float. NaN means "the instrument has no value".
 
