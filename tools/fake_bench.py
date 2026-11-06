@@ -68,6 +68,11 @@ FAULTS = {
     "scope_garbage_reply": "the scope answers 'ABC' to measurement queries",
     "scope_wrong_unit": "the scope answers in amps, e.g. '5.680E+02A' (CH1 set to a "
                         "current probe by mistake)",
+    # scope faults
+    "scope_never_triggers": "the single-shot stays armed and never triggers",
+    "scope_not_rearmed": "the scope ignores ':STARt', so it never starts a new "
+                         "capture and the old waveform stays on screen",
+    "probe_disconnected": "CH1 reads about 0.3 V of noise (VDS probe not connected)",
 }
 
 # Read-back queries that CONFIRM an instrument is off, and its OFF command.
@@ -272,6 +277,8 @@ def scope_handler(bench, cmd):
             bench.zoom_window = last_num(cmd) * 10
         return None
     if u.startswith(":STAR"):                      # arm single-shot
+        if bench.faults.get("scope_not_rearmed"):
+            return None                            # accepted, but nothing happens
         bench.armed = True
         bench.forced = False
         bench.polls_since_arm = 0
@@ -293,6 +300,8 @@ def scope_handler(bench, cmd):
         ovp = (bench.trig_source == 2)
         if not bench.armed or bench.forced:
             running = False
+        elif bench.faults.get("scope_never_triggers"):
+            running = True                          # waits forever for a trigger
         elif ovp:
             running = bench.polls_since_arm == 1
         else:
@@ -316,6 +325,8 @@ def scope_handler(bench, cmd):
 
 
 def _scope_max(bench, ch=1):
+    if ch == 1 and bench.faults.get("probe_disconnected"):
+        return 0.3                                  # noise on an open probe
     ovp = (bench.trig_source == 2)
     captured = bench.armed and (ovp or not bench.ac_on or bench.forced)
     top = bench.screen_top(ch)
