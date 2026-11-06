@@ -59,7 +59,14 @@ def block(data):
 # Fault switches: name -> what the fake instrument does wrong. Tests turn them
 # on with Bench(faults={"name": value}). An unknown name is an error, so a typo
 # can never make a test silently run with no fault at all.
-FAULTS = {}
+FAULTS = {
+    "ac_ignores_off": "the AC source accepts 'OUTPut OFF' but its output stays ON "
+                      "(like a source left in local/front-panel mode)",
+}
+
+# Read-back queries that CONFIRM an instrument is off, and its OFF command.
+OFF_CHECK = {"ac_source": ("OUTPUT OFF", "OUTPUT?", "OUTPUT ON"),
+             "e_load": ("INPUT OFF", "INPUT?", "INPUT ON")}
 
 
 class Bench:
@@ -113,6 +120,23 @@ class Bench:
         """Commands `role` received, upper-case, in order."""
         return [c.upper() for r, c, _ in self.log if r == role]
 
+    def off_state(self, role):
+        """What the fake instrument itself saw at the end, as (sent, confirmed):
+        sent      = it received its OFF command;
+        confirmed = its LAST read-back query was answered "0" (off), after an
+                    OFF command, and no ON command came after that answer."""
+        off_cmd, query, on_cmd = OFF_CHECK[role]
+        entries = [(c.upper(), r) for ro, c, r in self.log if ro == role]
+        sent = any(c == off_cmd for c, _ in entries)
+        asked = [i for i, (c, _) in enumerate(entries) if c == query]
+        if not sent or not asked:
+            return sent, False
+        last = asked[-1]
+        confirmed = ((entries[last][1] or "").strip() == "0"
+                     and any(c == off_cmd for c, _ in entries[:last])
+                     and not any(c == on_cmd for c, _ in entries[last + 1:]))
+        return sent, confirmed
+
     def load_current(self):
         """What the fake e-load draws: the static level, or the time-average of
         the two transient levels; 0 A with the input off."""
@@ -147,6 +171,8 @@ def ac_handler(bench, cmd):
     if u.startswith("OUTP"):
         if u.endswith("?"):                        # OUTPut? (confirm on/off)
             return "1" if bench.ac_on else "0"
+        if "OFF" in u and bench.faults.get("ac_ignores_off"):
+            return None                            # accepted, but nothing happens
         bench.ac_on = "ON" in u
         return None
     if u.startswith("VOLT"):

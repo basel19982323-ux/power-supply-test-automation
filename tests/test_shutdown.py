@@ -7,7 +7,9 @@ import testtypes
 from core.instruments.itech_ac import ITechACSource
 from core.instruments.itech_load import ITechLoad
 from core.runner import run_test
-from core.shutdown import AC_WARNING, LOAD_WARNING, shutdown_bench
+from core.shutdown import (AC_WARNING, CANNOT_ASK, CONFIRMED_OFF, LOAD_WARNING,
+                           NOT_SENT_NOT_CONFIRMED, SENT_NOT_CONFIRMED, SENT_STILL_ON,
+                           shutdown_bench)
 from core.verdict import ERROR, NOT_RUN, PASS
 
 
@@ -132,3 +134,69 @@ def test_load_stop_still_sends_transient_off_if_input_off_fails():
 @pytest.mark.parametrize("reply, on", [("1", True), ("0", False), ("OFF", False), ("ON\n", True)])
 def test_ac_driver_reads_back_its_output_state(reply, on):
     assert ITechACSource(_FakeVisa({"OUTPut?": reply})).output_is_on() is on
+
+
+# ---- OFF sent is not OFF confirmed (recorded separately) ------------------- #
+def _record(dev):
+    record = {}
+    warnings = shutdown_bench({dev.role: dev}, status=lambda m: None, record=record)
+    return record[dev.role], warnings
+
+
+@pytest.mark.parametrize("dev, sent, confirmed, state", [
+    (_Dev("ac_source", []), True, True, CONFIRMED_OFF),
+    (_Dev("ac_source", [], on_after_off=True), True, False, SENT_STILL_ON),
+    (_Dev("ac_source", [], fail={"output_is_on"}), True, None, SENT_NOT_CONFIRMED),
+    (_Dev("ac_source", [], fail={"off", "output_is_on"}), False, None,
+     NOT_SENT_NOT_CONFIRMED),
+    # the OFF command failed, but the source answers that it IS off -> safe
+    (_Dev("ac_source", [], fail={"off"}), False, True, CONFIRMED_OFF),
+    (_Dev("e_load", [], on_after_off=True), True, False, SENT_STILL_ON),
+])
+def test_sent_and_confirmed_are_recorded_separately(dev, sent, confirmed, state):
+    rec, warnings = _record(dev)
+    assert (rec["off_sent"], rec["confirmed_off"], rec["state"]) == (sent, confirmed, state)
+    assert (warnings == []) == (confirmed is True)      # only a confirmed OFF is safe
+
+
+def test_an_instrument_that_cannot_be_asked_is_not_confirmed():
+    class _NoReadback:
+        role = "ac_source"
+
+        def off(self):
+            pass
+
+        def close(self):
+            pass
+
+    rec, warnings = _record(_NoReadback())
+    assert (rec["off_sent"], rec["confirmed_off"], rec["state"]) == (True, None, CANNOT_ASK)
+    assert warnings == [AC_WARNING]                     # used to count as confirmed
+
+
+def test_run_result_has_the_shutdown_record(tmp_path):
+    res = _run("vds_ovp", tmp_path)
+    assert {r: (s["off_sent"], s["confirmed_off"]) for r, s in res.shutdown.items()} == {
+        "ac_source": (True, True), "e_load": (True, True)}
+
+
+# ---- the same with the REAL drivers against the fake bench --------------- #
+def test_real_drivers_send_off_and_the_instrument_confirms_it(run_on_fake_bench):
+    res, bench, _ = run_on_fake_bench("vds_ovp")
+    for role in ("ac_source", "e_load"):
+        assert bench.off_state(role) == (True, True)            # the instrument's view
+        assert res.shutdown[role]["confirmed_off"] is True       # the app's record
+    assert res.warnings == []
+
+
+def test_off_sent_but_ignored_is_not_confirmed(run_on_fake_bench):
+    # The source accepts "OUTPut OFF" but stays on: the command WAS sent, the
+    # read-back says ON -> the app must not report it as off.
+    res, bench, _ = run_on_fake_bench("vds_ovp", faults={"ac_ignores_off": True})
+    assert bench.off_state("ac_source") == (True, False)
+    assert bench.ac_on is True
+    rec = res.shutdown["ac_source"]
+    assert (rec["off_sent"], rec["confirmed_off"], rec["state"]) == (True, False,
+                                                                      SENT_STILL_ON)
+    assert AC_WARNING in res.warnings
+    assert res.shutdown["e_load"]["confirmed_off"] is True       # the load still is off
