@@ -45,6 +45,22 @@ NOT_RUN_CODES = {
 
 _COUNT_KEY = {PASS: "pass", FAIL: "fail", ERROR: "error", NOT_RUN: "not_run"}
 
+# One colour per result, used by the GUI and the Excel reports (hex RGB):
+# PASS green, FAIL red, ERROR amber, NOT RUN grey.
+RESULT_COLORS = {PASS: "C6EFCE", FAIL: "FFC7CE", ERROR: "FFEB9C", NOT_RUN: "D9D9D9"}
+
+
+def result_color(result):
+    """Colour for a result; anything unknown is shown like ERROR."""
+    return RESULT_COLORS.get(result, RESULT_COLORS[ERROR])
+
+
+def counts_text(summary):
+    """'14 PASS / 1 FAIL / 1 ERROR / 0 NOT RUN of 16' (all four, always)."""
+    return (f"{summary.get('pass', 0)} PASS / {summary.get('fail', 0)} FAIL / "
+            f"{summary.get('error', 0)} ERROR / {summary.get('not_run', 0)} NOT RUN "
+            f"of {summary.get('total', 0)}")
+
 
 # --------------------------------------------------------------------------- #
 # Errors with a fixed code

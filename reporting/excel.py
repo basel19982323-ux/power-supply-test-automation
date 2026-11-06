@@ -4,9 +4,14 @@ from openpyxl.styles import Font, PatternFill
 from openpyxl.utils import get_column_letter
 from openpyxl.utils.cell import coordinate_to_tuple
 
-_RED = PatternFill("solid", fgColor="FFC7CE")
-_GREEN = PatternFill("solid", fgColor="C6EFCE")
+from core.verdict import NOT_RUN, overall, result_color
+
 _BOLD = Font(bold=True)
+
+
+def _fill(result):
+    """PASS green, FAIL red, ERROR amber, NOT RUN grey."""
+    return PatternFill("solid", fgColor=result_color(result))
 
 
 def build_excel(rows, test, config, out_path, template=None, mapping=None):
@@ -37,15 +42,24 @@ def _default(rows, test, config, out_path):
     ws.title = "Summary"
     ws["A1"] = f"{test.name} — Summary"
     ws["A1"].font = Font(bold=True, size=14)
+    result = overall(rows)
     for i, (k, v) in enumerate([
         ("DUT", config.get("dut_name", "")),
         ("Test points", summary["total"]),
         ("PASS", summary["pass"]),
         ("FAIL", summary["fail"]),
+        ("ERROR", summary["error"]),
+        ("NOT RUN", summary["not_run"]),
+        ("Overall result", result),
         ("Date", date),
     ], start=3):
         ws.cell(i, 1, k).font = _BOLD
-        ws.cell(i, 2, v)
+        cell = ws.cell(i, 2, v)
+        if k == "Overall result":
+            cell.fill = _fill(result)
+            cell.font = _BOLD
+    ws["A12"] = ("PASS only if every point is PASS. ERROR = the measurement could not "
+                 "be trusted (see Code / Reason). NOT RUN = never measured.")
 
     ws2 = wb.create_sheet("Results")
     cols = test.result_columns
@@ -58,7 +72,7 @@ def _default(rows, test, config, out_path):
                 val = _num(val, col.digits)
             cell = ws2.cell(r_i, c_i, val)
             if col.kind == "result":
-                cell.fill = _GREEN if row.get("result") == "PASS" else _RED
+                cell.fill = _fill(row.get("result", NOT_RUN))
     for c in range(1, len(cols) + 1):
         ws2.column_dimensions[get_column_letter(c)].width = 15
 
@@ -78,6 +92,9 @@ def _fill_template(rows, test, config, out_path, template, mapping):
         "total": summary["total"],
         "pass": summary["pass"],
         "fail": summary["fail"],
+        "error": summary["error"],
+        "not_run": summary["not_run"],
+        "overall": overall(rows),
     }
 
     ss = mapping.get("summary_sheet")

@@ -2,10 +2,13 @@
 import os
 
 from PySide6.QtCore import Qt, QThreadPool
+from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (QAbstractItemView, QCheckBox, QFileDialog,
                                QGroupBox, QHBoxLayout, QLabel, QLineEdit,
                                QMessageBox, QPushButton, QTableWidget,
                                QTableWidgetItem, QVBoxLayout, QWidget)
+
+from core.verdict import counts_text, overall, result_color
 
 from .qt_workers import FnWorker
 
@@ -108,8 +111,8 @@ class ReportTab(QWidget):
         self._run_dir = run_dir
         self._rows = rows
         s = self.win.test.summarize(rows)
-        self.summary.setText(
-            f"Run: {run_dir}\n{s['pass']} PASS / {s['fail']} FAIL of {s['total']} points.")
+        self.summary.setText(f"Run: {run_dir}\n{counts_text(s)} points.  "
+                             f"Overall result: {overall(rows)}")
         self.open_btn.setEnabled(True)
 
         cols = self.win.test.result_columns
@@ -122,6 +125,7 @@ class ReportTab(QWidget):
                 item = QTableWidgetItem(str(row.get(col.key, "")))
                 if col.kind == "result":
                     item.setTextAlignment(Qt.AlignCenter)
+                    item.setBackground(QColor("#" + result_color(row.get(col.key))))
                 self.table.setItem(r, c, item)
         self.table.horizontalHeader().setStretchLastSection(True)
 

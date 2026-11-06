@@ -17,7 +17,12 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from core import config as configmod          # noqa: E402
 from core.runner import run_test               # noqa: E402
 from core.test_base import Callbacks           # noqa: E402
+from core.verdict import counts_text           # noqa: E402
 import testtypes                               # noqa: E402
+
+
+# Exit code = overall result, so a script or CI job can act on it.
+EXIT_CODES = {"PASS": 0, "FAIL": 1, "ERROR": 2, "NOT RUN": 3}
 
 
 def main(argv=None):
@@ -58,18 +63,16 @@ def main(argv=None):
     result = run_test(test, config, simulate=args.simulate, callbacks=callbacks)
 
     print(f"\nRun folder: {result.run_dir}")
-    s = result.summary
-    print(f"Summary: {s['pass']} PASS / {s['fail']} FAIL of {s['total']}")
+    print(f"Summary: {counts_text(result.summary)}")
+    print(f"Overall result: {result.overall}")
     for w in result.warnings:              # safety: AC / load not confirmed off
         print(f"\n!!! {w}", file=sys.stderr)
     if result.error:
         print(f"Ended with error: {result.error}")
-        return 2
     if result.aborted:
         print("Run was aborted.")
-        return 3
     print("Next: generate a report from the Report tab, or reporting/ CLI.")
-    return 0
+    return EXIT_CODES.get(result.overall, 2)
 
 
 if __name__ == "__main__":

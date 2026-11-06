@@ -10,6 +10,8 @@ import os
 from pptx import Presentation
 from pptx.util import Inches, Pt
 
+from core.verdict import ERROR, NOT_RUN, counts_text, overall
+
 
 def build_pptx(rows, test, config, out_path, run_dir, template=None):
     prs = Presentation(template) if template else Presentation()
@@ -22,8 +24,8 @@ def build_pptx(rows, test, config, out_path, run_dir, template=None):
     if s.shapes.title is not None:
         s.shapes.title.text = test.name
     subtitle = (f"{config.get('dut_name', '')}  |  {date}\n"
-                f"{summary['total']} test points: "
-                f"{summary['pass']} PASS, {summary['fail']} FAIL")
+                f"{counts_text(summary)} test points\n"
+                f"Overall result: {overall(rows)}")
     _set_subtitle(s, subtitle)
 
     # ---- one slide per test point ---- #
@@ -49,7 +51,15 @@ def build_pptx(rows, test, config, out_path, run_dir, template=None):
             s.shapes.add_picture(shot, Inches(0.6), Inches(1.0), width=Inches(6.8))
         else:
             miss = s.shapes.add_textbox(Inches(0.6), Inches(2.5), Inches(6), Inches(1))
-            miss.text_frame.text = "(screenshot missing)"
+            miss.text_frame.word_wrap = True
+            result = row.get("result", "")
+            if result == NOT_RUN:
+                miss.text_frame.text = f"NOT RUN - this point was not measured.\n{row.get('reason', '')}"
+            elif result == ERROR:
+                miss.text_frame.text = (f"ERROR {row.get('error_code', '')} - no valid capture."
+                                        f"\n{row.get('reason', '')}")
+            else:
+                miss.text_frame.text = "(screenshot missing)"
 
         side = s.shapes.add_textbox(Inches(7.6), Inches(1.1), Inches(2.3), Inches(4))
         tf = side.text_frame

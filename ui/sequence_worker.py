@@ -9,8 +9,7 @@ import threading
 
 from PySide6.QtCore import QObject, Signal, Slot
 
-from core.runner import run_test
-from core.sequence import make_sequence_dir, resolve_step
+from core.sequence import run_sequence
 from core.test_base import Callbacks
 
 
@@ -20,8 +19,8 @@ class SequenceWorker(QObject):
     status = Signal(str)
     screenshot = Signal(str)
     need_prompt = Signal(str)
-    step_finished = Signal(int, object)      # index, RunResult
-    sequence_finished = Signal(object)       # list of step dicts (with results)
+    step_finished = Signal(int, object)      # index, step dict (name, outcome, result)
+    sequence_finished = Signal(object)       # core.sequence.SequenceResult
 
     def __init__(self, steps, simulate):
         super().__init__()
@@ -32,31 +31,20 @@ class SequenceWorker(QObject):
 
     @Slot()
     def run(self):
-        parent = make_sequence_dir()
-        results = []
-        for i, step in enumerate(self._steps):
-            if self.abort_event.is_set():
-                break
-            try:
-                test, config = resolve_step(step)
-            except Exception as e:  # noqa: BLE001
-                self.status.emit(f"Step {i + 1} skipped: {e}")
-                continue
-            self.status.emit(f"===== Step {i + 1}/{len(self._steps)}: {test.name} =====")
-            callbacks = Callbacks(
-                on_start=(lambda n, idx=i, nm=test.name: self.step_started.emit(idx, nm, n)),
-                on_point_done=(lambda pi, row, idx=i: self.point_done.emit(idx, pi, row)),
-                on_status=(lambda m: self.status.emit(m)),
-                on_screenshot=(lambda p: self.screenshot.emit(p)),
-                prompt=self._prompt,
-            )
-            res = run_test(test, config, simulate=self._simulate, callbacks=callbacks,
-                           abort_event=self.abort_event, output_root=parent)
-            results.append({"name": test.name, "test": test, "config": config, "result": res})
-            self.step_finished.emit(i, res)
-            if res.aborted:
-                break
-        self.sequence_finished.emit(results)
+        seq = run_sequence(
+            self._steps, simulate=self._simulate, abort_event=self.abort_event,
+            callbacks_for=self._callbacks, on_status=self.status.emit,
+            on_step_finished=lambda i, step: self.step_finished.emit(i, step))
+        self.sequence_finished.emit(seq)
+
+    def _callbacks(self, i, test):
+        return Callbacks(
+            on_start=(lambda n: self.step_started.emit(i, test.name, n)),
+            on_point_done=(lambda pi, row: self.point_done.emit(i, pi, row)),
+            on_status=(lambda m: self.status.emit(m)),
+            on_screenshot=(lambda p: self.screenshot.emit(p)),
+            prompt=self._prompt,
+        )
 
     # ---- prompt round-trip (same pattern as RunWorker) ------------------ #
     def _prompt(self, message):
