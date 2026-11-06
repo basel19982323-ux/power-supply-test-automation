@@ -14,8 +14,11 @@ dependencies = [
 
 [project.optional-dependencies]
 hardware = ["pyvisa-py>=0.7", "pyusb", "psutil", "zeroconf"]
-dev = ["pytest>=8.0", "pyinstaller>=6.0"]
+dev = ["pytest>=8.0", "pyinstaller>=6.0", "ruff==0.17.4"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q"
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F"]
