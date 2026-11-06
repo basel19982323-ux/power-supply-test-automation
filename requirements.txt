@@ -18,3 +18,4 @@ pyvisa-py>=0.7      # pure-Python VISA backend (raw sockets for the fake bench)
 
 # Dev / test
 pytest>=8.0
+ruff==0.17.4        # linter, pinned so CI results don't change by themselves
