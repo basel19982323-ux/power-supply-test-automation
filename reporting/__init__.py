@@ -14,6 +14,7 @@ mapping for Excel), and the same rows fill your format with no code change.
 import os
 
 from core.results import read_csv
+from core.run_mode import read_run_info
 
 from .excel import build_excel
 from .pptx import build_pptx
@@ -26,13 +27,14 @@ def generate(run_dir, test, config, rows=None, *, excel=True, pptx=True,
         rows = read_csv(os.path.join(run_dir, "results.csv"))
     dut = config.get("dut_name", "DUT")
     mapping = mapping or {}
+    info = read_run_info(run_dir)          # SIMULATION / FAKE BENCH / LIVE ...
     out = {}
     if excel:
         out["excel"] = build_excel(
             rows, test, config, os.path.join(run_dir, f"{dut}_report.xlsx"),
-            template=template_excel, mapping=mapping.get("excel"))
+            template=template_excel, mapping=mapping.get("excel"), run_info=info)
     if pptx:
         out["pptx"] = build_pptx(
             rows, test, config, os.path.join(run_dir, f"{dut}_report.pptx"),
-            run_dir, template=template_pptx)
+            run_dir, template=template_pptx, run_info=info)
     return out

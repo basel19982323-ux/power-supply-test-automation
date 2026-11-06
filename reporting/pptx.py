@@ -13,7 +13,8 @@ from pptx.util import Inches, Pt
 from core.verdict import ERROR, NOT_RUN, counts_text, overall
 
 
-def build_pptx(rows, test, config, out_path, run_dir, template=None):
+def build_pptx(rows, test, config, out_path, run_dir, template=None, run_info=None):
+    run_info = run_info or {"mode": "UNKNOWN", "note": ""}
     prs = Presentation(template) if template else Presentation()
     summary = test.summarize(rows)
     date = rows[0]["timestamp"][:10] if rows else ""
@@ -25,7 +26,8 @@ def build_pptx(rows, test, config, out_path, run_dir, template=None):
         s.shapes.title.text = test.name
     subtitle = (f"{config.get('dut_name', '')}  |  {date}\n"
                 f"{counts_text(summary)} test points\n"
-                f"Overall result: {overall(rows)}")
+                f"Overall result: {overall(rows)}\n"
+                f"Run mode: {run_info['mode']} - {run_info['note']}")
     _set_subtitle(s, subtitle)
 
     # ---- one slide per test point ---- #

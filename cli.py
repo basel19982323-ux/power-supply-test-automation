@@ -65,6 +65,7 @@ def main(argv=None):
     print(f"\nRun folder: {result.run_dir}")
     print(f"Summary: {counts_text(result.summary)}")
     print(f"Overall result: {result.overall}")
+    print(f"Run mode: {result.mode}")
     for w in result.warnings:              # safety: AC / load not confirmed off
         print(f"\n!!! {w}", file=sys.stderr)
     if result.error:

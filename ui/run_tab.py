@@ -277,7 +277,8 @@ class RunTab(QWidget):
             QMessageBox.critical(self, "Run stopped", msg)
         elif result.aborted:
             self._on_status("Run aborted. Partial results saved.")
-        self._on_status(f"Done: {counts_text(s)}. Overall result: {result.overall}")
+        self._on_status(f"Done: {counts_text(s)}. Overall result: {result.overall}. "
+                        f"Run mode: {result.mode}")
         self._update_counts(result.overall)
         self._on_status(f"Output folder: {result.run_dir}")
         if result.warnings:                    # safety first: AC/load not confirmed off

@@ -8,6 +8,7 @@ from PySide6.QtWidgets import (QAbstractItemView, QCheckBox, QFileDialog,
                                QMessageBox, QPushButton, QTableWidget,
                                QTableWidgetItem, QVBoxLayout, QWidget)
 
+from core.run_mode import read_run_info
 from core.verdict import counts_text, overall, result_color
 
 from .qt_workers import FnWorker
@@ -112,7 +113,8 @@ class ReportTab(QWidget):
         self._rows = rows
         s = self.win.test.summarize(rows)
         self.summary.setText(f"Run: {run_dir}\n{counts_text(s)} points.  "
-                             f"Overall result: {overall(rows)}")
+                             f"Overall result: {overall(rows)}\n"
+                             f"Run mode: {read_run_info(run_dir)['mode']}")
         self.open_btn.setEnabled(True)
 
         cols = self.win.test.result_columns

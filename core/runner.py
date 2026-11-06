@@ -27,13 +27,15 @@ from .instruments.factory import build_instruments
 from .results import new_run_dir, write_csv
 from .shutdown import shutdown_bench
 from .test_base import AbortError, Callbacks, RunContext
+from .run_mode import UNKNOWN, classify_run, write_run_info
 from .verdict import (ERROR, NOT_RUN, PointError, classify_exception,
                       overall as overall_result)
 
 
 class RunResult:
     def __init__(self, run_dir, csv_path, rows, summary,
-                 aborted=False, error=None, overall=None, warnings=None, shutdown=None):
+                 aborted=False, error=None, overall=None, warnings=None, shutdown=None,
+                 mode=UNKNOWN, instruments=None):
         self.run_dir = run_dir
         self.csv_path = csv_path
         self.rows = rows
@@ -44,6 +46,9 @@ class RunResult:
         self.warnings = list(warnings or [])
         # Per instrument: OFF sent? OFF confirmed by the instrument? (core.shutdown)
         self.shutdown = dict(shutdown or {})
+        # SIMULATION / FAKE BENCH / LIVE / ... and the evidence (core.run_mode)
+        self.mode = mode
+        self.instruments = dict(instruments or {})
         # PASS / FAIL / ERROR / NOT RUN for the whole run (see core.verdict)
         self.overall = overall if overall is not None else overall_result(rows, error)
 
@@ -76,6 +81,7 @@ def run_test(test, config, *, simulate=False, callbacks=None,
     instruments = {}
     warnings = []
     shutdown = {}
+    mode, instrument_info = UNKNOWN, {}
 
     def record(index, row):
         rows.append(row)
@@ -132,8 +138,17 @@ def run_test(test, config, *, simulate=False, callbacks=None,
             test.finish(instruments, config, ctx)
         except Exception as e:  # noqa: BLE001
             ctx.status(f"    test teardown failed: {type(e).__name__}: {e}")
+        try:                    # decided from how the instruments were built,
+            mode, instrument_info = classify_run(instruments, config, simulate)
+        except Exception as e:  # noqa: BLE001 - never block the shutdown
+            ctx.status(f"    could not decide the run mode: {e}")
         # Load off, AC off, confirm, close - every instrument is tried (rule 8).
         warnings = shutdown_bench(instruments, ctx.status, record=shutdown)
+        ctx.status(f"Run mode: {mode}")
+        try:
+            write_run_info(run_dir, mode, instrument_info, shutdown)
+        except Exception as e:  # noqa: BLE001
+            ctx.status(f"    could not save run_info.json: {e}")
         fields = test.csv_fields or [c.key for c in test.result_columns]
         write_csv(csv_path, fields, rows)
         s = test.summarize(rows)
@@ -141,7 +156,8 @@ def run_test(test, config, *, simulate=False, callbacks=None,
                    f"{s['fail']} FAIL / {s['error']} ERROR / {s['not_run']} NOT RUN)")
 
     return RunResult(run_dir, csv_path, rows, test.summarize(rows),
-                     aborted=aborted, error=error, warnings=warnings, shutdown=shutdown)
+                     aborted=aborted, error=error, warnings=warnings, shutdown=shutdown,
+                     mode=mode, instruments=instrument_info)
 
 
 def _safe_row(test, point, config, result, code, reason, values=None):
