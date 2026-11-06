@@ -136,6 +136,12 @@ def scope_handler(bench, cmd):
         return None
     if u.startswith(":CHAN"):
         ch = chan_of(u)
+        if u.endswith("?"):                          # read-back queries
+            if "VDIV" in u:
+                return f"{bench.vdivs.get(ch, 1.0):.6E}"
+            if "OFFS" in u:
+                return f"{bench.offsets.get(ch, 0.0):.6E}"
+            return "0"
         if "VDIV" in u:
             bench.vdivs[ch] = max(last_num(cmd), 1e-6)
         elif "OFFS" in u:

@@ -6,6 +6,8 @@ check that model's programming manual and adjust CMDS only.
 """
 import time
 
+from .replies import parse_number
+
 CMDS = {
     "set_voltage": "VOLTage {v}",
     "set_frequency": "FREQuency {f}",
@@ -33,8 +35,9 @@ class ITechACSource:
         time.sleep(0.3)
         self.inst.write(CMDS["output_on"])
         time.sleep(settle_s)  # let DUT start up
-        measured = float(self.inst.query(CMDS["measure_voltage"]))
-        print(f"[AC source] set {voltage} V / {frequency} Hz, measured {measured:.1f} V")
+        measured = parse_number(self.inst.query(CMDS["measure_voltage"]), unit="V",
+                                what="AC source measured voltage")
+        print(f"[AC source] set {voltage} V / {frequency} Hz, measured {measured} V")
         return measured
 
     def off(self):

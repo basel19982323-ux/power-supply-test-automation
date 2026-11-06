@@ -9,15 +9,18 @@ a capture window, arms a single-shot trigger just above the steady peak, then
 cuts AC. If the captured peak clips the top of the screen, it widens the range,
 restarts the DUT, and re-cuts AC (up to a retry limit).
 
-PASS/FAIL is V_DS,max vs. the FET's V_DS rating x a derating margin. The load
+PASS/FAIL is V_DS,max vs. the FET's V_DS rating x a derating margin. A capture
+that is still clipped after the last retry is FAIL ("≥ X V") only if the scope's
+full-scale X is already above the limit; otherwise it is ERROR CLIPPED. The load
 condition is whatever you set up physically (e-load, resistor, or none) — this
 test does not control a load.
 """
 import os
 
 from core.test_base import Column, Field, Section, TableColumn, TestType
+from core.verdict import PointError, is_number, judge_upper
 
-from .common import vds_limit
+from .common import clip_check, vds_limit
 
 
 class VDSTurnoffTest(TestType):
@@ -162,8 +165,17 @@ class VDSTurnoffTest(TestType):
             if not ctx.simulate:
                 ctx.sleep(settle)
 
+        def measure_steady():
+            value = scope.measure_max(ch)
+            if not is_number(value):
+                ac.off()
+                raise PointError("NO_READING", f"steady-state VDS: the scope gave no "
+                                 f"valid value ({value!r}); AC was turned off without "
+                                 f"a capture")
+            return value
+
         establish_ac()
-        steady = scope.measure_max(ch)
+        steady = measure_steady()
         target_top = max(steady * headroom, limit_v * 1.1, steady * 1.2)
 
         vds_max, clipped, retries = steady, True, 0
@@ -178,8 +190,8 @@ class VDSTurnoffTest(TestType):
                 ctx.status("    no overshoot trigger within timeout; forcing capture")
                 scope.force_trigger()
             vds_max = scope.measure_max(ch)
-            top = scope.screen_top(ch)
-            clipped = vds_max >= top - max(0.02 * top, 1.0)
+            top = scope.read_screen_top(ch)          # what the SCOPE really shows
+            clipped = clip_check(vds_max, top)
             if not clipped or retries >= max_retries:
                 break
             retries += 1
@@ -187,19 +199,18 @@ class VDSTurnoffTest(TestType):
             ctx.status(f"    capture clipped at {top:.0f} V; retry {retries} -> "
                        f"full-scale {target_top:.0f} V")
             establish_ac()
-            steady = scope.measure_max(ch)
+            steady = measure_steady()
 
         tag = f"{dut}_VDS_{point['ac_condition'].replace('/', '_')}"
         shot_rel = os.path.join("screenshots", f"{tag}.png")
         scope.save_screenshot(os.path.join(ctx.run_dir, shot_rel))
         ac.off()  # leave DUT de-energized between points
 
-        result = "PASS" if (limit_v > 0 and vds_max <= limit_v) else "FAIL"
-        note = " (CLIPPED — increase headroom/probe)" if clipped else ""
-        ctx.status(f"    VDS max {vds_max:.1f} V  limit {limit_v:.1f} V -> {result}{note}")
+        j = judge_upper(vds_max, limit_v, what="VDS max", clipped=clipped, screen_top=top)
+        ctx.status(f"    {j.reason} -> {j.result}")
 
-        return self.make_row(point, config, result,
-                             vds_max_v=round(vds_max, 1), clipped=clipped,
+        return self.make_row(point, config, j.result, j.code, j.reason,
+                             vds_max_v=j.shown, clipped=clipped,
                              retries=retries, screenshot=shot_rel)
 
     def identity(self, point, config):

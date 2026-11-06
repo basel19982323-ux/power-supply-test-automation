@@ -10,6 +10,8 @@ A broken measurement is not a broken product, so there are four results:
 ERROR is never counted as PASS. Every ERROR and NOT RUN row carries one of the
 short fixed codes below plus a human-readable reason.
 """
+import math
+from dataclasses import dataclass
 
 PASS = "PASS"
 FAIL = "FAIL"
@@ -115,6 +117,90 @@ def combine(results):
     if not results or NOT_RUN in results:
         return NOT_RUN
     return PASS
+
+
+# --------------------------------------------------------------------------- #
+# Judging a reading (rules 1 and 2)
+# --------------------------------------------------------------------------- #
+def is_number(value):
+    """True only for a real, finite number (not NaN, not infinity, not None)."""
+    return (isinstance(value, (int, float)) and not isinstance(value, bool)
+            and math.isfinite(value))
+
+
+@dataclass
+class Judgement:
+    result: str      # PASS / FAIL / ERROR
+    code: str        # error code, "" for PASS / FAIL
+    reason: str      # human-readable explanation
+    shown: object    # what to show in the table, e.g. 568.0 or "≥ 946.8"
+
+
+def judge_upper(value, limit, *, what="VDS max", unit="V", clipped=False,
+                screen_top=None, digits=1):
+    """Judge a reading against an upper limit.
+
+    PASS only if the reading is a real number, not clipped, and <= limit.
+    NaN / None / infinity -> ERROR NO_READING (never PASS: note that in Python
+    `nan > limit` is False, so a naive "FAIL if value > limit else PASS" would
+    give PASS for a broken reading).
+
+    Clipped capture: X = top-of-screen voltage read back from the scope.
+      X above the limit -> FAIL, shown as "≥ X" (the true peak is even higher)
+      otherwise         -> ERROR CLIPPED (the true peak is unknown)
+    """
+    if not is_number(limit) or limit <= 0:
+        return Judgement(ERROR, "BAD_CONFIG",
+                         f"the limit ({limit!r}) is not a positive number", "")
+    if clipped:
+        x = screen_top
+        if not is_number(x):
+            return Judgement(ERROR, "CLIPPED", f"{what}: the capture was clipped and "
+                             f"the scope's full-scale could not be read back", "")
+        shown = f"≥ {x:.{digits}f}"
+        if x > limit:
+            return Judgement(FAIL, "", f"{what} {shown} {unit} (clipped at full-scale) is "
+                             f"already above the {limit:.{digits}f} {unit} limit", shown)
+        return Judgement(ERROR, "CLIPPED", f"{what} clipped at {x:.{digits}f} {unit}, below "
+                         f"the {limit:.{digits}f} {unit} limit: the true peak is unknown",
+                         shown)
+    if not is_number(value):
+        return Judgement(ERROR, "NO_READING",
+                         f"{what}: the scope gave no valid value ({value!r})", "")
+    shown = round(float(value), digits)
+    if value <= limit:
+        return Judgement(PASS, "", f"{what} {value:.{digits}f} {unit} <= limit "
+                         f"{limit:.{digits}f} {unit}", shown)
+    return Judgement(FAIL, "", f"{what} {value:.{digits}f} {unit} > limit "
+                     f"{limit:.{digits}f} {unit}", shown)
+
+
+def judge_window(vmin, vmax, low, high, *, unit="V", digits=3):
+    """Judge Vmin/Vmax against a [low, high] window (Dynamic Output Response)."""
+    for name, v in (("Vmin", vmin), ("Vmax", vmax)):
+        if not is_number(v):
+            return Judgement(ERROR, "NO_READING", f"{name}: the scope gave no valid "
+                             f"value ({v!r}) - nothing captured?", "")
+    if not (is_number(low) and is_number(high)) or low >= high:
+        return Judgement(ERROR, "BAD_CONFIG", f"invalid limit window [{low!r}, {high!r}]", "")
+    if vmin > vmax:
+        return Judgement(ERROR, "NO_READING", f"Vmin {vmin:.{digits}f} {unit} is above "
+                         f"Vmax {vmax:.{digits}f} {unit}: not a valid measurement", "")
+    window = f"[{low:.{digits}f}, {high:.{digits}f}] {unit}"
+    if low <= vmin and vmax <= high:
+        return Judgement(PASS, "", f"Vmin {vmin:.{digits}f} and Vmax {vmax:.{digits}f} "
+                         f"{unit} inside {window}", "")
+    out = []
+    if vmin < low:
+        out.append(f"Vmin {vmin:.{digits}f} {unit} below {low:.{digits}f} {unit}")
+    if vmax > high:
+        out.append(f"Vmax {vmax:.{digits}f} {unit} above {high:.{digits}f} {unit}")
+    return Judgement(FAIL, "", "; ".join(out), "")
+
+
+def rounded(value, digits):
+    """Round a reading for the table; a non-number is shown as an empty cell."""
+    return round(float(value), digits) if is_number(value) else ""
 
 
 def overall(rows, run_error=None):

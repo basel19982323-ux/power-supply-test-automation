@@ -11,7 +11,7 @@ TestType interface: plan() builds the point list, execute_point() runs one point
 import os
 
 from core.test_base import Column, Field, Section, TableColumn, TestType
-from core.verdict import StopRunError
+from core.verdict import StopRunError, is_number, judge_window, rounded
 
 
 class DynamicOutputResponseTest(TestType):
@@ -173,18 +173,19 @@ class DynamicOutputResponseTest(TestType):
         vmin_l, vmax_l = self._limits(config, point)
         # Sanity abort: a wildly out-of-range reading means a probe/setup problem,
         # so the whole run stops and the bench is shut down (rule 7).
-        if vmax > point["pd_voltage"] * 2 or vmin < -1:
+        # (A NaN reading is not "insane" here - judge_window makes it ERROR NO_READING.)
+        if (is_number(vmax) and vmax > point["pd_voltage"] * 2) or                 (is_number(vmin) and vmin < -1):
             raise StopRunError(
                 "SANITY_ABORT",
                 f"reading out of sane range (Vmax {vmax:.3f} V, Vmin {vmin:.3f} V for a "
                 f"{point['pd_voltage']:g} V output) - check probe/channel; run stopped "
                 f"for safety",
-                vmax_v=round(vmax, 4), vmin_v=round(vmin, 4), screenshot=shot_rel)
-        result = "PASS" if (vmin >= vmin_l and vmax <= vmax_l) else "FAIL"
-        ctx.status(f"    limits [{vmin_l:.3f}, {vmax_l:.3f}] V -> {result}")
+                vmax_v=rounded(vmax, 4), vmin_v=rounded(vmin, 4), screenshot=shot_rel)
+        j = judge_window(vmin, vmax, vmin_l, vmax_l)
+        ctx.status(f"    {j.reason} -> {j.result}")
 
-        return self.make_row(point, config, result,
-                             vmax_v=round(vmax, 4), vmin_v=round(vmin, 4),
+        return self.make_row(point, config, j.result, j.code, j.reason,
+                             vmax_v=rounded(vmax, 4), vmin_v=rounded(vmin, 4),
                              screenshot=shot_rel)
 
     # ---- helpers -------------------------------------------------------- #

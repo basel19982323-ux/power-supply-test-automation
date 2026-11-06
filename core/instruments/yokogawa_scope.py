@@ -13,6 +13,8 @@ commands especially are model-dependent — they are grouped in CMDS below.
 """
 import time
 
+from .replies import parse_number
+
 CMDS = {
     # ---- continuous measurement (Dynamic Output Response test) ---- #
     "meas_on": ":MEASure:MODE ON",
@@ -27,6 +29,8 @@ CMDS = {
     "bandwidth": ":CHANnel{ch}:BWIDth {b}",        # FULL | 20M | ...
     "vdiv": ":CHANnel{ch}:VDIV {v}",               # volts/div
     "offset": ":CHANnel{ch}:OFFSet {v}",           # vertical offset (volts)
+    "vdiv_q": ":CHANnel{ch}:VDIV?",                # read back volts/div
+    "offset_q": ":CHANnel{ch}:OFFSet?",            # read back offset
     "tdiv": ":TIMebase:TDIV {t}",                  # main (top) seconds/div
     "acq_mode": ":ACQuire:MODE {m}",               # NORMal | ENVelope (peak-detect)
     # ---- zoom (split display: main on top, zoom window on bottom) ---- #
@@ -72,9 +76,11 @@ class YokogawaScope:
         self.inst.write(CMDS["item_min_on"].format(ch=channel))
 
     def read_vmax_vmin(self, channel):
-        vmax = float(self.inst.query(CMDS["query_max"].format(ch=channel)))
-        vmin = float(self.inst.query(CMDS["query_min"].format(ch=channel)))
-        print(f"[Scope] CH{channel}: Vmax={vmax:.4f} V, Vmin={vmin:.4f} V")
+        vmax = parse_number(self.inst.query(CMDS["query_max"].format(ch=channel)),
+                            unit="V", what=f"CH{channel} Vmax")
+        vmin = parse_number(self.inst.query(CMDS["query_min"].format(ch=channel)),
+                            unit="V", what=f"CH{channel} Vmin")
+        print(f"[Scope] CH{channel}: Vmax={vmax} V, Vmin={vmin} V")
         return vmax, vmin
 
     # ---- vertical / horizontal / acquisition setup --------------------- #
@@ -95,7 +101,18 @@ class YokogawaScope:
         self._offset[ch] = offset
 
     def screen_top(self, ch):
+        """Top of the screen as the APP set it (may differ from the scope's)."""
         return self._offset.get(ch, 0.0) + self._vdiv.get(ch, 1.0) * self.VERT_DIVS / 2
+
+    def read_screen_top(self, ch):
+        """Top of the screen as the SCOPE reports it. A scope can silently clamp
+        a volts/div it can't do (for example above its maximum range), so the
+        clip check and the "≥ X V" value use this read-back, not our own number."""
+        vdiv = parse_number(self.inst.query(CMDS["vdiv_q"].format(ch=ch)),
+                            unit="V", what=f"CH{ch} V/div")
+        offset = parse_number(self.inst.query(CMDS["offset_q"].format(ch=ch)),
+                              unit="V", what=f"CH{ch} offset")
+        return offset + vdiv * self.VERT_DIVS / 2
 
     def screen_bottom(self, ch):
         return self._offset.get(ch, 0.0) - self._vdiv.get(ch, 1.0) * self.VERT_DIVS / 2
@@ -161,7 +178,8 @@ class YokogawaScope:
     def measure_max(self, ch):
         self.inst.write(CMDS["meas_on"])
         self.inst.write(CMDS["item_max_on"].format(ch=ch))
-        return float(self.inst.query(CMDS["query_max"].format(ch=ch)))
+        return parse_number(self.inst.query(CMDS["query_max"].format(ch=ch)),
+                            unit="V", what=f"CH{ch} max")
 
     # ---- screenshot ----------------------------------------------------- #
     def save_screenshot(self, filepath):

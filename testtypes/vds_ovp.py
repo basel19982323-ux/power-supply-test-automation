@@ -17,8 +17,9 @@ the trigger condition and that the event is operator-initiated.
 import os
 
 from core.test_base import Column, Field, Section, TableColumn, TestType
+from core.verdict import PointError, is_number, judge_upper, rounded
 
-from .common import vds_limit
+from .common import clip_check, vds_limit
 
 
 class VDSOVPTest(TestType):
@@ -186,6 +187,11 @@ class VDSOVPTest(TestType):
             ctx.sleep(settle)
 
         steady = scope.measure_max(vds_ch)                 # steady VDS (auto-range)
+        if not is_number(steady):
+            eload.stop()
+            ac.off()
+            raise PointError("NO_READING", f"steady-state VDS: the scope gave no valid "
+                             f"value ({steady!r}); the bench was turned off")
         target_top = max(steady * headroom, limit_v * 1.1, steady * 1.2)
 
         vds_max, vout_ovp, clipped, retries = steady, steady_out, True, 0
@@ -205,8 +211,8 @@ class VDSOVPTest(TestType):
                 scope.force_trigger()
             vds_max = scope.measure_max(vds_ch)
             vout_ovp = scope.measure_max(vout_ch)
-            top = scope.screen_top(vds_ch)
-            clipped = vds_max >= top - max(0.02 * top, 1.0)
+            top = scope.read_screen_top(vds_ch)      # what the SCOPE really shows
+            clipped = clip_check(vds_max, top)
             if not clipped or retries >= max_retries:
                 break
             retries += 1
@@ -223,13 +229,11 @@ class VDSOVPTest(TestType):
         eload.stop()
         ac.off()
 
-        result = "PASS" if (limit_v > 0 and vds_max <= limit_v) else "FAIL"
-        note = " (CLIPPED)" if clipped else ""
-        ctx.status(f"    VDS max {vds_max:.1f} V (Vout OVP {vout_ovp:.1f} V) "
-                   f"limit {limit_v:.1f} V -> {result}{note}")
+        j = judge_upper(vds_max, limit_v, what="VDS max", clipped=clipped, screen_top=top)
+        ctx.status(f"    {j.reason} (Vout OVP {vout_ovp} V) -> {j.result}")
 
-        return self.make_row(point, config, result,
-                             vout_ovp_v=round(vout_ovp, 2), vds_max_v=round(vds_max, 1),
+        return self.make_row(point, config, j.result, j.code, j.reason,
+                             vout_ovp_v=rounded(vout_ovp, 2), vds_max_v=j.shown,
                              clipped=clipped, retries=retries, screenshot=shot_rel)
 
     def identity(self, point, config):

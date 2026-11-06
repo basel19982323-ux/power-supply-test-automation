@@ -6,6 +6,7 @@ turn-off spike for the VDS test) so the fake scope can fabricate believable
 readings — keeping the test types and runner completely hardware-agnostic.
 """
 import base64
+import math
 import os
 
 # Minimal valid 1x1 PNG, used as a last-resort placeholder screenshot.
@@ -22,6 +23,11 @@ class SimBench:
                  steady_out=20.0, ovp_vout=28.0, ovp_vds_factor=1.3, faults=None):
         # Fault switches for tests (the config's `simulation:` section), e.g.
         #   reading_scale: 10   -> scope readings x10 (probe attenuation set wrong)
+        #   scope_nan: true     -> the scope answers "no value" (9.91E37 = NaN) for
+        #                          captured / dynamic readings
+        #   scope_max_top: 500  -> the scope can't show more than 500 V full-scale
+        #                          (range limit) and silently clamps, so the top of
+        #                          the screen is lower than the app asked for
         self.faults = dict(faults or {})
         # Dynamic Output Response test
         self.pd_voltage = 5.0
@@ -120,6 +126,8 @@ class SimScope:
         scale = float(self.bench.faults.get("reading_scale", 1.0))
         vmax = v * (1 + swing) * scale
         vmin = v * (1 - swing) * scale
+        if self.bench.faults.get("scope_nan"):
+            vmax = vmin = float("nan")
         self._last = (vmax, vmin, channel)
         print(f"[Scope] (sim) CH{channel}: Vmax={vmax:.4f} V, Vmin={vmin:.4f} V")
         return vmax, vmin
@@ -140,9 +148,15 @@ class SimScope:
 
     def set_vertical(self, ch, vdiv, offset=0.0):
         self._v_top[ch] = offset + vdiv * self.VERT_DIVS / 2
+        max_top = self.bench.faults.get("scope_max_top")
+        if max_top:                               # like a real scope: clamp silently
+            self._v_top[ch] = min(self._v_top[ch], float(max_top))
         self._v_bottom[ch] = offset - vdiv * self.VERT_DIVS / 2
 
     def screen_top(self, ch):
+        return self._v_top.get(ch, 1e12)
+
+    def read_screen_top(self, ch):
         return self._v_top.get(ch, 1e12)
 
     def screen_bottom(self, ch):
@@ -211,6 +225,8 @@ class SimScope:
             self._vds_last = (self._steady_vds(),
                               self._steady_vds() * self.bench.vds_spike_factor,
                               top, clipped)
+        if captured and self.bench.faults.get("scope_nan"):
+            return float("nan")
         return val
 
     # ---- screenshot ---- #
@@ -267,6 +283,8 @@ def _new_scope_image():
 
 
 def _draw_dynamic_waveform(filepath, vmax, vmin, channel):
+    if not (math.isfinite(vmax) and math.isfinite(vmin)):
+        return False                     # nothing to draw -> placeholder image
     try:
         img, d, w, h = _new_scope_image()
     except ImportError:
