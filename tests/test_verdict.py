@@ -54,3 +54,21 @@ def test_every_row_and_csv_has_code_and_reason_columns(tmp_path, test_id):
     assert res.rows and all("error_code" in r and "reason" in r for r in res.rows)
     header = read_csv(res.csv_path)[0].keys()
     assert "error_code" in header and "reason" in header
+
+
+def test_every_code_used_in_the_code_is_a_known_fixed_code():
+    # Rule 10: scan the source for every code given to PointError / StopRunError /
+    # Judgement(ERROR, ...) and check it is in the fixed list (no typos, no
+    # made-up codes that the reports would not explain).
+    import pathlib
+    import re
+    root = pathlib.Path(__file__).resolve().parent.parent
+    pattern = re.compile(r'(?:PointError|StopRunError)\(\s*"([A-Z_]+)"'
+                         r'|Judgement\(\s*ERROR,\s*"([A-Z_]+)"')
+    used = set()
+    for folder in ("core", "testtypes"):
+        for path in (root / folder).rglob("*.py"):
+            for m in pattern.finditer(path.read_text(encoding="utf-8")):
+                used.add(m.group(1) or m.group(2))
+    assert len(used) >= 8                       # the scan really found the codes
+    assert used <= set(ERROR_CODES) | set(NOT_RUN_CODES), used - set(ERROR_CODES)
