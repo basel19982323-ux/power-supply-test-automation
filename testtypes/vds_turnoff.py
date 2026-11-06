@@ -9,14 +9,20 @@ a capture window, arms a single-shot trigger just above the steady peak, then
 cuts AC. If the captured peak clips the top of the screen, it widens the range,
 restarts the DUT, and re-cuts AC (up to a retry limit).
 
-PASS/FAIL is V_DS,max vs. the FET's V_DS rating x a derating margin. The load
+PASS/FAIL is V_DS,max vs. the FET's V_DS rating x a derating margin. A capture
+that is still clipped after the last retry is FAIL ("≥ X V") only if the scope's
+full-scale X is already above the limit; otherwise it is ERROR CLIPPED. The load
 condition is whatever you set up physically (e-load, resistor, or none) — this
 test does not control a load.
 """
 import os
-from datetime import datetime
 
 from core.test_base import Column, Field, Section, TableColumn, TestType
+from core.verdict import PointError, judge_upper
+
+from .common import (PROBE_CHECK_MAX_X, PROBE_CHECK_MAX_X_RATING,
+                     PROBE_CHECK_MIN_X, check_steady_below_limit, check_steady_vds,
+                     clip_check, quiet_off, vds_limit)
 
 
 class VDSTurnoffTest(TestType):
@@ -37,10 +43,13 @@ class VDSTurnoffTest(TestType):
         Column("fet_rating_v", "FET rating (V)", "number", 0),
         Column("retries", "Retries", "number", 0),
         Column("result", "Result", "result"),
+        Column("error_code", "Code", "text"),
+        Column("reason", "Reason", "text"),
     ]
     csv_fields = ["timestamp", "dut", "ac_condition", "vin_set_v", "freq_hz",
                   "fet_rating_v", "derating_pct", "limit_v", "vds_max_v",
-                  "clipped", "retries", "result", "screenshot"]
+                  "clipped", "retries", "result", "screenshot",
+                  "error_code", "reason"]
 
     # ---- configuration -------------------------------------------------- #
     def default_config(self) -> dict:
@@ -64,6 +73,9 @@ class VDSTurnoffTest(TestType):
                 "trigger_timeout_s": 5.0,
                 "max_retries": 3,
                 "settle_s": 2.0,             # DUT stabilize time after AC on
+                "probe_check_min_x": PROBE_CHECK_MIN_X,  # steady VDS vs AC peak
+                "probe_check_max_x": PROBE_CHECK_MAX_X,
+                "probe_check_max_x_rating": PROBE_CHECK_MAX_X_RATING,
             },
             "limits": {
                 "fet_vds_rating_v": 650.0,
@@ -99,6 +111,13 @@ class VDSTurnoffTest(TestType):
                     Field("trigger_timeout_s", "Trigger timeout", "number", 5.0, "s"),
                     Field("max_retries", "Max auto-range retries", "int", 3, ""),
                     Field("settle_s", "DUT settle after AC on", "number", 2.0, "s"),
+                    Field("probe_check_min_x", "Probe check: min VDS", "number",
+                          PROBE_CHECK_MIN_X, "x AC peak"),
+                    Field("probe_check_max_x", "Probe check: max VDS", "number",
+                          PROBE_CHECK_MAX_X, "x AC peak"),
+                    Field("probe_check_max_x_rating",
+                          "Probe check: max VDS at least (check only, not a safe voltage)",
+                          "number", PROBE_CHECK_MAX_X_RATING, "x FET rating"),
                 ],
             ),
             Section(
@@ -138,18 +157,21 @@ class VDSTurnoffTest(TestType):
                               float(sc.get("zoom_position_s", 0.0)))
 
     def execute_point(self, point, instruments, config, ctx) -> dict:
-        import time
+        try:
+            return self._measure(point, instruments, config, ctx)
+        except BaseException:
+            # Whatever went wrong, leave the DUT de-energized before reporting it.
+            quiet_off(ctx, ("turn the AC source off", instruments["ac_source"].off))
+            raise
 
+    def _measure(self, point, instruments, config, ctx) -> dict:
         ac = instruments["ac_source"]
         scope = instruments["scope"]
         sc = config["scope"]
-        lim = config["limits"]
         ch = int(sc["channel"])
         divs = getattr(scope, "VERT_DIVS", 8)
 
-        rating = float(lim.get("fet_vds_rating_v", 0) or 0)
-        derating = float(lim.get("derating_pct", 100) or 100)
-        limit_v = rating * derating / 100.0
+        rating, _, limit_v = vds_limit(config)
 
         headroom = float(sc.get("vertical_headroom_x", 2.0))
         trig_factor = float(sc.get("trigger_level_factor", 1.1))
@@ -161,26 +183,41 @@ class VDSTurnoffTest(TestType):
         def establish_ac():
             ac.apply(point["ac_voltage"], point["ac_frequency"])
             if not ctx.simulate:
-                time.sleep(settle)
+                ctx.sleep(settle)
+
+        if not limit_v > 0:
+            raise PointError("BAD_CONFIG", "no valid FET VDS rating / derating, so "
+                             "there is no limit to test against; AC was not applied")
+
+        def measure_steady():
+            v = check_steady_vds(scope.measure_max(ch), point["ac_voltage"], sc, rating)
+            return check_steady_below_limit(v, limit_v, "Cutting the AC as a test event")
 
         establish_ac()
-        steady = scope.measure_max(ch)
+        steady = measure_steady()
         target_top = max(steady * headroom, limit_v * 1.1, steady * 1.2)
 
         vds_max, clipped, retries = steady, True, 0
         while True:
             vdiv = target_top / divs
             scope.set_vertical(ch, vdiv, offset=target_top / 2.0)   # 0..target_top visible
-            scope.set_trigger(ch, level=steady * trig_factor, slope="rising", mode="single")
-            scope.arm_single()
+            level = steady * trig_factor
+            scope.set_trigger(ch, level=level, slope="rising", mode="single")
+            if not scope.arm_single():
+                raise PointError("STALE_CAPTURE", "the scope did not confirm a new "
+                                 "single-shot, so the waveform on screen is old; AC was "
+                                 "turned off without using it", retries=retries)
             ctx.status(f"    armed single-shot; cutting AC (full-scale {target_top:.0f} V)")
             ac.off()
-            if not scope.wait_trigger(timeout):
-                ctx.status("    no overshoot trigger within timeout; forcing capture")
-                scope.force_trigger()
+            if not scope.wait_trigger(timeout, cancel=ctx.check_stop):
+                # No forced capture: a forced capture shows whatever is on the
+                # screen, not the turn-off peak, so it could falsely PASS.
+                scope.stop_acquisition()
+                raise PointError("NO_TRIGGER", f"no capture above {level:.0f} V within "
+                                 f"{timeout:g} s after AC off", retries=retries)
             vds_max = scope.measure_max(ch)
-            top = scope.screen_top(ch)
-            clipped = vds_max >= top - max(0.02 * top, 1.0)
+            top = scope.read_screen_top(ch)          # what the SCOPE really shows
+            clipped = clip_check(vds_max, top)
             if not clipped or retries >= max_retries:
                 break
             retries += 1
@@ -188,29 +225,27 @@ class VDSTurnoffTest(TestType):
             ctx.status(f"    capture clipped at {top:.0f} V; retry {retries} -> "
                        f"full-scale {target_top:.0f} V")
             establish_ac()
-            steady = scope.measure_max(ch)
+            steady = measure_steady()
 
         tag = f"{dut}_VDS_{point['ac_condition'].replace('/', '_')}"
         shot_rel = os.path.join("screenshots", f"{tag}.png")
         scope.save_screenshot(os.path.join(ctx.run_dir, shot_rel))
         ac.off()  # leave DUT de-energized between points
 
-        result = "PASS" if (limit_v > 0 and vds_max <= limit_v) else "FAIL"
-        note = " (CLIPPED — increase headroom/probe)" if clipped else ""
-        ctx.status(f"    VDS max {vds_max:.1f} V  limit {limit_v:.1f} V -> {result}{note}")
+        j = judge_upper(vds_max, limit_v, what="VDS max", clipped=clipped, screen_top=top)
+        ctx.status(f"    {j.reason} -> {j.result}")
 
+        return self.make_row(point, config, j.result, j.code, j.reason,
+                             vds_max_v=j.shown, clipped=clipped,
+                             retries=retries, screenshot=shot_rel)
+
+    def identity(self, point, config):
+        rating, derating, limit_v = vds_limit(config)
         return {
-            "timestamp": datetime.now().isoformat(timespec="seconds"),
-            "dut": dut,
             "ac_condition": point["ac_condition"],
             "vin_set_v": point["ac_voltage"],
             "freq_hz": point["ac_frequency"],
             "fet_rating_v": rating,
             "derating_pct": derating,
             "limit_v": round(limit_v, 1),
-            "vds_max_v": round(vds_max, 1),
-            "clipped": clipped,
-            "retries": retries,
-            "result": result,
-            "screenshot": shot_rel,
         }

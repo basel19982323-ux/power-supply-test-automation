@@ -6,12 +6,15 @@ check that model's programming manual and adjust CMDS only.
 """
 import time
 
+from .replies import parse_number, parse_on_off
+
 CMDS = {
     "set_voltage": "VOLTage {v}",
     "set_frequency": "FREQuency {f}",
     "output_on": "OUTPut ON",
     "output_off": "OUTPut OFF",
     "measure_voltage": "MEASure:VOLTage?",
+    "output_q": "OUTPut?",
 }
 
 
@@ -33,12 +36,17 @@ class ITechACSource:
         time.sleep(0.3)
         self.inst.write(CMDS["output_on"])
         time.sleep(settle_s)  # let DUT start up
-        measured = float(self.inst.query(CMDS["measure_voltage"]))
-        print(f"[AC source] set {voltage} V / {frequency} Hz, measured {measured:.1f} V")
+        measured = parse_number(self.inst.query(CMDS["measure_voltage"]), unit="V",
+                                what="AC source measured voltage")
+        print(f"[AC source] set {voltage} V / {frequency} Hz, measured {measured} V")
         return measured
 
     def off(self):
         self.inst.write(CMDS["output_off"])
+
+    def output_is_on(self):
+        """Ask the source whether its output is on (used to CONFIRM AC off)."""
+        return parse_on_off(self.inst.query(CMDS["output_q"]), what="AC source output")
 
     def close(self):
         try:

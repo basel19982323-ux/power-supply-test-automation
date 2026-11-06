@@ -8,10 +8,13 @@ from PySide6.QtWidgets import (QAbstractItemView, QGroupBox, QHBoxLayout, QLabel
                                QPushButton, QScrollArea, QSlider, QSplitter,
                                QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget)
 
+from core.verdict import counts_text, overall, result_color, summarize
+
 from .run_worker import RunWorker
 
-_GREEN = QColor(198, 239, 206)
-_RED = QColor(255, 199, 206)
+
+def _qcolor(result):
+    return QColor("#" + result_color(result))
 
 
 class RunTab(QWidget):
@@ -21,8 +24,7 @@ class RunTab(QWidget):
         self._thread = None
         self._worker = None
         self._cols = []
-        self._passes = 0
-        self._fails = 0
+        self._rows = []           # rows shown so far (for the live counts)
         self._current_pix = None
         self._current_path = None
         self._fit = True          # fit-to-panel vs. manual zoom
@@ -186,15 +188,12 @@ class RunTab(QWidget):
                 text = str(value)
             item = QTableWidgetItem(text)
             if col.kind == "result":
-                item.setBackground(_GREEN if value == "PASS" else _RED)
+                item.setBackground(_qcolor(value))
                 item.setTextAlignment(Qt.AlignCenter)
             self.table.setItem(r, c, item)
         self.table.scrollToBottom()
 
-        if row.get("result") == "PASS":
-            self._passes += 1
-        elif row.get("result") == "FAIL":
-            self._fails += 1
+        self._rows.append(row)
         self._update_counts()
         self.progress.setValue(self.progress.value() + 1)
 
@@ -275,12 +274,14 @@ class RunTab(QWidget):
                         "  • Turn ON Simulation mode to run with no hardware.\n"
                         "  • Start tools/fake_bench.py and click 'Use fake bench' on "
                         "the Instruments tab (Simulation OFF).")
-            QMessageBox.critical(self, "Run error", msg)
+            QMessageBox.critical(self, "Run stopped", msg)
         elif result.aborted:
             self._on_status("Run aborted. Partial results saved.")
-        else:
-            self._on_status(f"Done: {s['pass']} PASS / {s['fail']} FAIL of {s['total']}.")
+        self._on_status(f"Done: {counts_text(s)}. Overall result: {result.overall}")
+        self._update_counts(result.overall)
         self._on_status(f"Output folder: {result.run_dir}")
+        if result.warnings:                    # safety first: AC/load not confirmed off
+            QMessageBox.warning(self, "Bench may still be ON", "\n\n".join(result.warnings))
 
         self._thread.quit()
         self._thread.wait()
@@ -301,8 +302,7 @@ class RunTab(QWidget):
         self.table.setColumnCount(len(self._cols))
         self.table.setHorizontalHeaderLabels([c.label for c in self._cols])
         self.table.horizontalHeader().setStretchLastSection(True)
-        self._passes = 0
-        self._fails = 0
+        self._rows = []
         self._update_counts()
         self.progress.setValue(0)
         self.log.clear()
@@ -312,5 +312,10 @@ class RunTab(QWidget):
         self.preview.setText("No capture yet.")
         self.preview.adjustSize()
 
-    def _update_counts(self):
-        self.counts_lbl.setText(f"PASS {self._passes}   FAIL {self._fails}")
+    def _update_counts(self, final=None):
+        s = summarize(self._rows)
+        text = (f"PASS {s['pass']}   FAIL {s['fail']}   ERROR {s['error']}   "
+                f"NOT RUN {s['not_run']}")
+        if final or self._rows:
+            text += f"   |   Overall: {final or overall(self._rows)}"
+        self.counts_lbl.setText(text)

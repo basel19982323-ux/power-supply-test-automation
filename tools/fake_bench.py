@@ -70,10 +70,13 @@ class Bench:
         self.steady_out = steady_out
         self.ovp_vout = ovp_vout
         self.ovp_vds_factor = ovp_vds_factor
+        self.load = {"input": False, "tran": False, "cc": 0.0, "a": 0.0, "b": 0.0,
+                     "aw": 1.0, "bw": 1.0}   # e-load settings
         self.vdivs = {}              # per-channel volts/div
         self.offsets = {}            # per-channel vertical offset
         self.armed = False
         self.forced = False
+        self.polls_since_arm = 0     # :STAT? polls since the last :STARt
         self.zoom_on = False
         self.main_window = 0.5
         self.zoom_window = 0.05
@@ -83,6 +86,17 @@ class Bench:
         self.last_vds = (0.0, 0.0, 0.0, False)
         self.ovp = {"vds": 0.0, "vds_top": 0.0, "vds_clip": False,
                     "vout": 0.0, "vout_top": 0.0}
+
+    def load_current(self):
+        """What the fake e-load draws: the static level, or the time-average of
+        the two transient levels; 0 A with the input off."""
+        ld = self.load
+        if not ld["input"]:
+            return 0.0
+        if ld["tran"]:
+            total = ld["aw"] + ld["bw"]
+            return (ld["a"] * ld["aw"] + ld["b"] * ld["bw"]) / total if total else 0.0
+        return ld["cc"]
 
     def steady_vds(self):
         return self.ac_voltage * 1.41421 + self.reflected
@@ -105,6 +119,8 @@ def ac_handler(bench, cmd):
     if u.startswith("MEAS"):                       # MEASure:VOLTage?
         return f"{(bench.ac_voltage if bench.ac_on else 0.0):.3f}"
     if u.startswith("OUTP"):
+        if u.endswith("?"):                        # OUTPut? (confirm on/off)
+            return "1" if bench.ac_on else "0"
         bench.ac_on = "ON" in u
         return None
     if u.startswith("VOLT"):
@@ -117,9 +133,33 @@ def ac_handler(bench, cmd):
 
 
 def eload_handler(bench, cmd):
-    if cmd.upper().startswith("*IDN?"):
+    u = cmd.upper()
+    ld = bench.load
+    if u.startswith("*IDN?"):
         return "SIM,ITECH-IT8800,FAKE-BENCH,1.0"
-    return None                                    # accept all load writes
+    if u.startswith("MEAS"):                       # MEASure:CURRent?
+        return f"{bench.load_current():.4f}"
+    if u.startswith("INP"):
+        if u.endswith("?"):
+            return "1" if ld["input"] else "0"
+        ld["input"] = "ON" in u
+        return None
+    if u.startswith("TRAN"):                       # TRANsient ON|OFF
+        ld["tran"] = "ON" in u
+        return None
+    if u.startswith("CURR"):
+        if "ALEV" in u:
+            ld["a"] = last_num(cmd)
+        elif "BLEV" in u:
+            ld["b"] = last_num(cmd)
+        elif "AWID" in u:
+            ld["aw"] = last_num(cmd)
+        elif "BWID" in u:
+            ld["bw"] = last_num(cmd)
+        elif "SLEW" not in u and "MODE" not in u:
+            ld["cc"] = last_num(cmd)               # CURRent {i}: static level
+        return None
+    return None                                    # FUNCtion etc. accepted
 
 
 def scope_handler(bench, cmd):
@@ -136,6 +176,12 @@ def scope_handler(bench, cmd):
         return None
     if u.startswith(":CHAN"):
         ch = chan_of(u)
+        if u.endswith("?"):                          # read-back queries
+            if "VDIV" in u:
+                return f"{bench.vdivs.get(ch, 1.0):.6E}"
+            if "OFFS" in u:
+                return f"{bench.offsets.get(ch, 0.0):.6E}"
+            return "0"
         if "VDIV" in u:
             bench.vdivs[ch] = max(last_num(cmd), 1e-6)
         elif "OFFS" in u:
@@ -160,8 +206,10 @@ def scope_handler(bench, cmd):
     if u.startswith(":STAR"):                      # arm single-shot
         bench.armed = True
         bench.forced = False
+        bench.polls_since_arm = 0
         return None
     if u.startswith(":STOP"):
+        bench.armed = False                         # acquisition stopped, no capture
         return None
     if u.startswith(":TRIG"):
         if "FORC" in u:
@@ -170,8 +218,17 @@ def scope_handler(bench, cmd):
             bench.trig_source = int(last_num(cmd, 1))
         return None
     if u.startswith(":STAT"):                       # :STATus:CONDition?
+        # Running = armed and waiting. Turn-off test: waits until AC goes off.
+        # OVP test: running on the first poll (arm confirmed), then the
+        # (simulated) operator opens the switch and it triggers.
+        bench.polls_since_arm += 1
         ovp = (bench.trig_source == 2)
-        running = bench.armed and not bench.forced and (bench.ac_on and not ovp)
+        if not bench.armed or bench.forced:
+            running = False
+        elif ovp:
+            running = bench.polls_since_arm == 1
+        else:
+            running = bench.ac_on
         return "1" if running else "0"
     if ":MEAS" in u:
         if "MAX" in u and "VAL" in u:

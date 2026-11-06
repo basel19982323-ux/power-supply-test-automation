@@ -15,9 +15,15 @@ e-load (static CC) and a CH2-based trigger. The difference from Turn-off is only
 the trigger condition and that the event is operator-initiated.
 """
 import os
-from datetime import datetime
 
 from core.test_base import Column, Field, Section, TableColumn, TestType
+from core.verdict import PointError, judge_upper, rounded
+
+from .common import (LOAD_CHECK_PCT, PROBE_CHECK_MAX_X, PROBE_CHECK_MAX_X_RATING,
+                     PROBE_CHECK_MIN_X,
+                     check_load_current, check_steady_below_limit, check_steady_output,
+                     check_steady_vds,
+                     clip_check, quiet_off, vds_limit)
 
 
 class VDSOVPTest(TestType):
@@ -39,10 +45,13 @@ class VDSOVPTest(TestType):
         Column("limit_v", "Limit (V)", "number", 1),
         Column("retries", "Retries", "number", 0),
         Column("result", "Result", "result"),
+        Column("error_code", "Code", "text"),
+        Column("reason", "Reason", "text"),
     ]
     csv_fields = ["timestamp", "dut", "ac_condition", "vin_set_v", "freq_hz", "load_a",
                   "vout_steady_v", "vout_ovp_v", "fet_rating_v", "derating_pct",
-                  "limit_v", "vds_max_v", "clipped", "retries", "result", "screenshot"]
+                  "limit_v", "vds_max_v", "clipped", "retries", "result", "screenshot",
+                  "error_code", "reason"]
 
     # ---- configuration -------------------------------------------------- #
     def default_config(self) -> dict:
@@ -69,6 +78,9 @@ class VDSOVPTest(TestType):
                 "trigger_timeout_s": 10.0,
                 "max_retries": 2,
                 "settle_s": 2.0,
+                "probe_check_min_x": PROBE_CHECK_MIN_X,  # steady VDS vs AC peak
+                "probe_check_max_x": PROBE_CHECK_MAX_X,
+                "probe_check_max_x_rating": PROBE_CHECK_MAX_X_RATING,
             },
             "limits": {
                 "fet_vds_rating_v": 650.0,
@@ -112,6 +124,13 @@ class VDSOVPTest(TestType):
                     Field("trigger_timeout_s", "Trigger timeout", "number", 10.0, "s"),
                     Field("max_retries", "Max auto-range retries", "int", 2, ""),
                     Field("settle_s", "DUT settle after AC on", "number", 2.0, "s"),
+                    Field("probe_check_min_x", "Probe check: min VDS", "number",
+                          PROBE_CHECK_MIN_X, "x AC peak"),
+                    Field("probe_check_max_x", "Probe check: max VDS", "number",
+                          PROBE_CHECK_MAX_X, "x AC peak"),
+                    Field("probe_check_max_x_rating",
+                          "Probe check: max VDS at least (check only, not a safe voltage)",
+                          "number", PROBE_CHECK_MAX_X_RATING, "x FET rating"),
                 ],
             ),
             Section(
@@ -158,19 +177,27 @@ class VDSOVPTest(TestType):
         scope.set_vertical(vout_ch, full / divs, offset=full / 2.0)
 
     def execute_point(self, point, instruments, config, ctx) -> dict:
-        import time
+        try:
+            return self._measure(point, instruments, config, ctx)
+        except BaseException:
+            # Whatever went wrong, leave the DUT de-energized before reporting it.
+            quiet_off(ctx, ("turn the e-load off", instruments["e_load"].stop),
+                      ("turn the AC source off", instruments["ac_source"].off))
+            raise
 
+    def _measure(self, point, instruments, config, ctx) -> dict:
         ac = instruments["ac_source"]
         eload = instruments["e_load"]
         scope = instruments["scope"]
         sc = config["scope"]
-        lim = config["limits"]
         vds_ch, vout_ch = int(sc["vds_channel"]), int(sc["vout_channel"])
         divs = getattr(scope, "VERT_DIVS", 8)
 
-        rating = float(lim.get("fet_vds_rating_v", 0) or 0)
-        derating = float(lim.get("derating_pct", 100) or 100)
-        limit_v = rating * derating / 100.0
+        rating, _, limit_v = vds_limit(config)
+
+        if not limit_v > 0:
+            raise PointError("BAD_CONFIG", "no valid FET VDS rating / derating, so "
+                             "there is no limit to test against; AC was not applied")
 
         steady_out = float(sc.get("vout_steady_v", 20.0))
         trig_level = float(sc.get("vout_trigger_level_v", 22.0))
@@ -184,16 +211,27 @@ class VDSOVPTest(TestType):
         ac.apply(point["ac_voltage"], point["ac_frequency"])
         eload.set_cc(load_a)
         if not ctx.simulate:
-            time.sleep(settle)
+            ctx.sleep(settle)
 
-        steady = scope.measure_max(vds_ch)                 # steady VDS (auto-range)
+        # Load check: the static load really draws its current (before the event).
+        check_load_current(eload.measure_current(), load_a,
+                           float(config["load"].get("check_pct", LOAD_CHECK_PCT)),
+                           f"{load_a:g} A static load")
+        # Probe checks before the event (rule 4): VDS on CH1, the output on CH2.
+        steady = check_steady_vds(scope.measure_max(vds_ch), point["ac_voltage"], sc,
+                                  rating)
+        check_steady_below_limit(steady, limit_v, "Breaking the feedback loop")
+        check_steady_output(scope.measure_max(vout_ch), steady_out, trig_level)
         target_top = max(steady * headroom, limit_v * 1.1, steady * 1.2)
 
         vds_max, vout_ovp, clipped, retries = steady, steady_out, True, 0
         while True:
             scope.set_vertical(vds_ch, target_top / divs, offset=target_top / 2.0)
             scope.set_trigger(vout_ch, level=trig_level, slope="rising", mode="single")
-            scope.arm_single()
+            if not scope.arm_single():
+                raise PointError("STALE_CAPTURE", "the scope did not confirm a new "
+                                 "single-shot, so the waveform on screen is old",
+                                 retries=retries)
             ctx.status(f"    armed single-shot on CH{vout_ch} (output) rising > "
                        f"{trig_level:.1f} V; full-scale {target_top:.0f} V")
             if not ctx.simulate:
@@ -201,13 +239,15 @@ class VDSOVPTest(TestType):
                     f"Open the optocoupler switch now (break the feedback loop). The "
                     f"output will jump up from {steady_out:.0f} V and trigger the "
                     f"capture. Click Continue once the output has jumped.")
-            if not scope.wait_trigger(timeout):
-                ctx.status("    no OVP trigger within timeout; forcing capture")
-                scope.force_trigger()
+            if not scope.wait_trigger(timeout, cancel=ctx.check_stop):
+                scope.stop_acquisition()              # no forced capture (rule 5)
+                raise PointError("NO_TRIGGER", f"no capture: the output never rose "
+                                 f"above {trig_level:.1f} V within {timeout:g} s",
+                                 retries=retries)
             vds_max = scope.measure_max(vds_ch)
             vout_ovp = scope.measure_max(vout_ch)
-            top = scope.screen_top(vds_ch)
-            clipped = vds_max >= top - max(0.02 * top, 1.0)
+            top = scope.read_screen_top(vds_ch)      # what the SCOPE really shows
+            clipped = clip_check(vds_max, top)
             if not clipped or retries >= max_retries:
                 break
             retries += 1
@@ -224,26 +264,22 @@ class VDSOVPTest(TestType):
         eload.stop()
         ac.off()
 
-        result = "PASS" if (limit_v > 0 and vds_max <= limit_v) else "FAIL"
-        note = " (CLIPPED)" if clipped else ""
-        ctx.status(f"    VDS max {vds_max:.1f} V (Vout OVP {vout_ovp:.1f} V) "
-                   f"limit {limit_v:.1f} V -> {result}{note}")
+        j = judge_upper(vds_max, limit_v, what="VDS max", clipped=clipped, screen_top=top)
+        ctx.status(f"    {j.reason} (Vout OVP {vout_ovp} V) -> {j.result}")
 
+        return self.make_row(point, config, j.result, j.code, j.reason,
+                             vout_ovp_v=rounded(vout_ovp, 2), vds_max_v=j.shown,
+                             clipped=clipped, retries=retries, screenshot=shot_rel)
+
+    def identity(self, point, config):
+        rating, derating, limit_v = vds_limit(config)
         return {
-            "timestamp": datetime.now().isoformat(timespec="seconds"),
-            "dut": dut,
             "ac_condition": point["ac_condition"],
             "vin_set_v": point["ac_voltage"],
             "freq_hz": point["ac_frequency"],
-            "load_a": load_a,
-            "vout_steady_v": steady_out,
-            "vout_ovp_v": round(vout_ovp, 2),
+            "load_a": float(config["load"]["current_a"]),
+            "vout_steady_v": float(config["scope"].get("vout_steady_v", 20.0)),
             "fet_rating_v": rating,
             "derating_pct": derating,
             "limit_v": round(limit_v, 1),
-            "vds_max_v": round(vds_max, 1),
-            "clipped": clipped,
-            "retries": retries,
-            "result": result,
-            "screenshot": shot_rel,
         }

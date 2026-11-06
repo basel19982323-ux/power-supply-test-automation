@@ -32,7 +32,10 @@ copying them into a report.
 - **PASS/FAIL against derated limits**: the MOSFET V<sub>DS</sub> rating can be typed in or
   extracted from the component's datasheet PDF, then derated by a set margin.
 - **Safety behaviour**: AC output off between conditions, load input off after each point, and an
-  abort if a reading is far out of range (for example a bad probe).
+  abort if a reading is far out of range (for example a bad probe). Before the AC is cut or the
+  feedback is broken, the steady V<sub>DS</sub> is checked: impossible values are ERROR, and a
+  value already above the limit is FAIL with no test event and the run stopped. The
+  "1.5 × FET rating" top of the probe check is a provisional measurement check, not a safe voltage.
 - **Pluggable test framework**: a new test type is one class; the GUI, runner, sequencing and
   reporting pick it up automatically.
 - **Testable without hardware**: a simulation mode, plus a fake bench that speaks SCPI over TCP so the
@@ -158,6 +161,26 @@ debugging with instruments live; after that a full 16-point matrix runs in
 minutes, hands-off. Safety behaviors are built in: AC output off between
 conditions, load input off after each point, and a sanity-abort if a reading is
 wildly out of range (bad probe).
+
+**Before any real-hardware run: confirm the probes by hand.** The engineer must
+check the probe type (for example a high-voltage differential probe on the
+MOSFET drain) and that the probe attenuation set in the app (Setup → "Probe
+attenuation"; for OVP also "Output probe atten." on CH2) matches the probe
+that is really connected. The app can't
+detect every wrong setting. Its probe check only rejects readings that are not
+believable:
+
+| Wrong probe setting | Detected by the app? |
+|---|---|
+| Probe disconnected (about 0 V) | Yes: ERROR `PROBE_CHECK` |
+| Attenuation 10× too low (reads 10× too low) | Yes, for a normal flyback: ERROR `PROBE_CHECK` |
+| Attenuation 10× too high (reads 10× too high), 650 V FET | Yes: ERROR `PROBE_CHECK`, run stopped |
+| 10× too high with a very high-voltage FET at low line | Not by the probe check; the reading is above the limit, so FAIL and the run stops (never PASS) |
+| **Small errors, for example 2× too low** | **No.** The reading looks normal and **could PASS a bad DUT** |
+
+The "1.5 × FET rating" top of the probe check is a provisional measurement
+check, not a safe operating voltage. These thresholds were tested in
+simulation and against the fake bench only, not yet on real instruments.
 
 ---
 

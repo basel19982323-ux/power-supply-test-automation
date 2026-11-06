@@ -8,6 +8,7 @@ a combined report.
 import os
 
 from PySide6.QtCore import Qt, QThread, QThreadPool
+from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (QAbstractItemView, QComboBox, QDialog,
                                QDialogButtonBox, QFormLayout, QGroupBox,
                                QHBoxLayout, QLabel, QListWidget, QMessageBox,
@@ -16,6 +17,8 @@ from PySide6.QtWidgets import (QAbstractItemView, QComboBox, QDialog,
 
 import testtypes
 from core import config as configmod
+
+from core.verdict import result_color
 
 from .qt_workers import FnWorker
 from .sequence_worker import SequenceWorker
@@ -105,9 +108,8 @@ class SequenceTab(QWidget):
         outer.addWidget(self.step_progress)
 
         # ---- per-step summary ---- #
-        self.summary = QTableWidget(0, 6)
-        self.summary.setHorizontalHeaderLabels(
-            ["#", "Test", "Points", "PASS", "FAIL", "Outcome"])
+        self.summary = QTableWidget(0, len(_SUMMARY_COLS))
+        self.summary.setHorizontalHeaderLabels(_SUMMARY_COLS)
         self.summary.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.summary.horizontalHeader().setStretchLastSection(True)
         outer.addWidget(self.summary, 1)
@@ -235,39 +237,33 @@ class SequenceTab(QWidget):
         else:
             self._worker.request_abort()
 
-    def _on_step_finished(self, index, result):
-        s = result.summary
-        if result.error:
-            outcome = "ERROR"
-        elif result.aborted:
-            outcome = "ABORTED"
-        elif s["fail"] == 0:
-            outcome = "PASS"
-        else:
-            outcome = "FAIL"
+    def _on_step_finished(self, index, step):
+        res = step["result"]
+        s = res.summary if res is not None else {}
+        outcome = step["outcome"]
         r = self.summary.rowCount()
         self.summary.insertRow(r)
-        vals = [str(index + 1), self.step_lbl.text().split(": ", 1)[-1],
-                str(s["total"]), str(s["pass"]), str(s["fail"]), outcome]
+        vals = [str(index + 1), step["name"]] + [
+            str(s.get(k, "")) for k in ("total", "pass", "fail", "error", "not_run")] + [
+            outcome, " ".join(x for x in (step["code"], step["reason"]) if x)]
         for c, v in enumerate(vals):
             item = QTableWidgetItem(v)
-            if c == 5:
-                item.setBackground(_outcome_color(outcome))
+            if _SUMMARY_COLS[c] == "Result":
+                item.setBackground(QColor("#" + result_color(outcome)))
                 item.setTextAlignment(Qt.AlignCenter)
             self.summary.setItem(r, c, item)
         self.overall.setValue(self.overall.value() + 1)
 
-    def _on_sequence_finished(self, results):
+    def _on_sequence_finished(self, seq):
         self.abort_btn.setEnabled(False)
         self.run_btn.setEnabled(True)
-        self._results = results
-        self._seq_dir = (os.path.dirname(results[0]["result"].run_dir)
-                         if results else None)
-        passed = sum(1 for st in results if st["result"].summary["fail"] == 0
-                     and not st["result"].error and not st["result"].aborted)
-        self._on_status(f"Sequence complete: {passed}/{len(results)} steps passed.")
-        self.step_lbl.setText("Done.")
-        if results:
+        self._results = seq.steps
+        self._seq_dir = seq.seq_dir
+        passed = sum(1 for st in seq.steps if st["outcome"] == "PASS")
+        self._on_status(f"Sequence result: {seq.overall} "
+                        f"({passed}/{len(seq.steps)} steps PASS).")
+        self.step_lbl.setText(f"Done - sequence result: {seq.overall}")
+        if any(st["result"] is not None for st in seq.steps):
             self.report_btn.setEnabled(True)
             self.open_btn.setEnabled(True)
 
@@ -308,9 +304,5 @@ class SequenceTab(QWidget):
                 QMessageBox.warning(self, "Could not open folder", str(e))
 
 
-def _outcome_color(outcome):
-    from PySide6.QtGui import QColor
-    return {
-        "PASS": QColor(198, 239, 206),
-        "FAIL": QColor(255, 199, 206),
-    }.get(outcome, QColor(255, 235, 156))
+_SUMMARY_COLS = ["#", "Test", "Points", "PASS", "FAIL", "ERROR", "NOT RUN", "Result",
+                 "Code / reason"]

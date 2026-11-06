@@ -6,6 +6,7 @@ turn-off spike for the VDS test) so the fake scope can fabricate believable
 readings — keeping the test types and runner completely hardware-agnostic.
 """
 import base64
+import math
 import os
 
 # Minimal valid 1x1 PNG, used as a last-resort placeholder screenshot.
@@ -19,7 +20,22 @@ class SimBench:
 
     def __init__(self, wobble_pct=2.0, fault_profiles=None,
                  vds_reflected=100.0, vds_spike_factor=1.2,
-                 steady_out=20.0, ovp_vout=28.0, ovp_vds_factor=1.3):
+                 steady_out=20.0, ovp_vout=28.0, ovp_vds_factor=1.3, faults=None):
+        # Fault switches for tests (the config's `simulation:` section), e.g.
+        #   reading_scale: 10   -> scope readings x10 (probe attenuation set wrong)
+        #   scope_nan: true     -> the scope answers "no value" (9.91E37 = NaN) for
+        #                          captured / dynamic readings
+        #   ac_off_unconfirmed: true   -> the AC source still says ON after OFF
+        #   disconnect_ac_after: 2     -> the AC source connection is lost after
+        #                                 2 commands (every later call fails)
+        #   load_reach_factor: 0.5     -> the e-load only draws 50 % of its setting
+        #   probe_disconnected: true   -> the VDS probe (CH1) reads only noise
+        #   scope_never_triggers: true -> the single-shot never fires
+        #   scope_not_rearmed: true    -> :STARt is ignored, the old waveform stays
+        #   scope_max_top: 500  -> the scope can't show more than 500 V full-scale
+        #                          (range limit) and silently clamps, so the top of
+        #                          the screen is lower than the app asked for
+        self.faults = dict(faults or {})
         # Dynamic Output Response test
         self.pd_voltage = 5.0
         self.wobble_pct = wobble_pct
@@ -42,17 +58,30 @@ class SimACSource:
     def __init__(self, bench):
         self.bench = bench
         self.idn = "SIM,ITECH-AC,0,1.0"
+        self.commands = []          # every command, so tests can check them
         print(f"[AC source] {self.idn}")
 
+    def _send(self, cmd):
+        limit = self.bench.faults.get("disconnect_ac_after")
+        if limit is not None and len(self.commands) >= int(limit):
+            raise ConnectionResetError("VI_ERROR_CONN_LOST: (sim) AC source disconnected")
+        self.commands.append(cmd)
+
     def apply(self, voltage, frequency, settle_s=2.0):
+        self._send(f"APPLY {voltage} {frequency}")
         self.bench.ac_voltage = float(voltage)
         self.bench.ac_on = True
         print(f"[AC source] (sim) set {voltage} V / {frequency} Hz")
         return float(voltage)
 
     def off(self):
+        self._send("OUTP OFF")
         self.bench.ac_on = False
         print("[AC source] (sim) output OFF")
+
+    def output_is_on(self):
+        self._send("OUTP?")
+        return bool(self.bench.ac_on or self.bench.faults.get("ac_off_unconfirmed"))
 
     def close(self):
         pass
@@ -67,14 +96,25 @@ class SimLoad:
         print(f"[E-load] {self.idn}")
 
     def start_transient(self, i_low, i_high, freq_hz, duty_pct, slew_a_us):
+        d = float(duty_pct) / 100.0
+        self.bench.load_a = float(i_low) * (1 - d) + float(i_high) * d   # average
+        self.bench.load_on = True
         print(f"[E-load] (sim) transient {i_low}<->{i_high} A @ {freq_hz} Hz")
 
     def set_cc(self, current):
         self.bench.load_a = float(current)
+        self.bench.load_on = True
         print(f"[E-load] (sim) static CC {current} A")
 
+    def measure_current(self):
+        return self.bench.load_a * float(self.bench.faults.get("load_reach_factor", 1.0))
+
     def stop(self):
-        pass
+        self.bench.load_a = 0.0
+        self.bench.load_on = False
+
+    def input_is_on(self):
+        return bool(getattr(self.bench, "load_on", False))
 
     def close(self):
         pass
@@ -114,8 +154,11 @@ class SimScope:
         for label in self.bench.fault_profiles:
             if abs(self._label_to_v(label) - v) < 1e-6:
                 swing = 0.10
-        vmax = v * (1 + swing)
-        vmin = v * (1 - swing)
+        scale = float(self.bench.faults.get("reading_scale", 1.0))
+        vmax = v * (1 + swing) * scale
+        vmin = v * (1 - swing) * scale
+        if self.bench.faults.get("scope_nan"):
+            vmax = vmin = float("nan")
         self._last = (vmax, vmin, channel)
         print(f"[Scope] (sim) CH{channel}: Vmax={vmax:.4f} V, Vmin={vmin:.4f} V")
         return vmax, vmin
@@ -136,9 +179,15 @@ class SimScope:
 
     def set_vertical(self, ch, vdiv, offset=0.0):
         self._v_top[ch] = offset + vdiv * self.VERT_DIVS / 2
+        max_top = self.bench.faults.get("scope_max_top")
+        if max_top:                               # like a real scope: clamp silently
+            self._v_top[ch] = min(self._v_top[ch], float(max_top))
         self._v_bottom[ch] = offset - vdiv * self.VERT_DIVS / 2
 
     def screen_top(self, ch):
+        return self._v_top.get(ch, 1e12)
+
+    def read_screen_top(self, ch):
         return self._v_top.get(ch, 1e12)
 
     def screen_bottom(self, ch):
@@ -161,18 +210,25 @@ class SimScope:
         self._mode = "ovp" if source_ch == 2 else "vds"
 
     def arm_single(self):
+        if self.bench.faults.get("scope_not_rearmed"):
+            return False                      # the old capture stays on screen
         self._armed = True
         self._forced = False
+        return True
 
-    def wait_trigger(self, timeout_s):
+    def wait_trigger(self, timeout_s, cancel=None):
         # Turn-off: fires when AC goes off. OVP: fires on the (simulated) operator
         # opening the optocoupler after arming.
+        if cancel is not None:
+            cancel()
+        if self.bench.faults.get("scope_never_triggers"):
+            return False
         if self._trig_source == 2:
             return bool(self._armed)
         return bool(self._armed and not self.bench.ac_on)
 
-    def force_trigger(self):
-        self._forced = True
+    def stop_acquisition(self):
+        self._armed = False
 
     def _steady_vds(self):
         return self.bench.ac_voltage * 1.41421 + self.bench.vds_reflected
@@ -188,6 +244,8 @@ class SimScope:
         else:                                           # pre-arm steady
             true_val = self.bench.steady_out if ch == 2 else self._steady_vds()
 
+        if self.bench.faults.get("probe_disconnected") and ch == 1:
+            true_val = 0.3                                # noise on an open probe
         top = self._v_top.get(ch, 1e12)
         clipped = true_val > top
         val = min(true_val, top)
@@ -207,6 +265,8 @@ class SimScope:
             self._vds_last = (self._steady_vds(),
                               self._steady_vds() * self.bench.vds_spike_factor,
                               top, clipped)
+        if captured and self.bench.faults.get("scope_nan"):
+            return float("nan")
         return val
 
     # ---- screenshot ---- #
@@ -263,6 +323,8 @@ def _new_scope_image():
 
 
 def _draw_dynamic_waveform(filepath, vmax, vmin, channel):
+    if not (math.isfinite(vmax) and math.isfinite(vmin)):
+        return False                     # nothing to draw -> placeholder image
     try:
         img, d, w, h = _new_scope_image()
     except ImportError:

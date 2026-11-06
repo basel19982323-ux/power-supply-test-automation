@@ -1,0 +1,127 @@
+"""Probe check (rule 4): an impossible steady-state reading is ERROR
+PROBE_CHECK, found BEFORE the AC is cut or the OVP event is started."""
+import pytest
+
+import testtypes
+from core.instruments.factory import build_instruments
+from core.runner import run_test
+from core.test_base import RunContext
+from core.verdict import ERROR, PointError, StopRunError
+from testtypes.common import check_steady_output, check_steady_vds
+
+
+def _run(test_id, tmp_path, **sim):
+    t = testtypes.get_test(test_id)
+    cfg = t.default_config()
+    cfg["simulation"] = sim
+    return run_test(t, cfg, simulate=True, output_root=str(tmp_path))
+
+
+# ---- the rule itself ----------------------------------------------------- #
+@pytest.mark.parametrize("value", [473.0, 200.0, 900.0])   # 230 Vac: AC peak 325 V, range 163..976 V
+def test_possible_steady_vds_passes_the_check(value):
+    assert check_steady_vds(value, 230, {}) == value
+
+
+@pytest.mark.parametrize("value", [0.3, 100.0])   # ~0 V / below the bulk voltage
+def test_too_low_steady_vds_is_probe_check_and_the_run_continues(value):
+    with pytest.raises(PointError) as e:
+        check_steady_vds(value, 230, {})
+    assert e.value.code == "PROBE_CHECK" and "probe disconnected" in e.value.reason
+
+
+def test_too_high_steady_vds_is_probe_check_and_stops_the_run():
+    # 10x too high (probe ratio set wrong) - or a real over-voltage: no event at all.
+    with pytest.raises(StopRunError) as e:
+        check_steady_vds(4730.0, 230, {})
+    assert e.value.code == "PROBE_CHECK" and e.value.result == ERROR
+    assert "attenuation" in e.value.reason
+
+
+def test_probe_check_limits_come_from_the_config():
+    with pytest.raises(StopRunError):
+        check_steady_vds(473.0, 230, {"probe_check_max_x": 1.2})   # 473 > 1.2 x 325
+
+
+# ---- low line (90 Vac): the top of the range is never below 1.5 x the FET rating
+# 90 Vac -> AC peak 127 V; 3 x 127 = 382 V. A healthy flyback can read more:
+# 127 V bulk + ~130 V reflected + ~130 V leakage spike = ~387 V.
+def test_healthy_low_line_dut_is_not_stopped_by_the_probe_check():
+    assert check_steady_vds(387.0, 90, {}, fet_rating_v=650.0) == 387.0   # top 975 V
+
+
+def test_without_a_rating_the_old_3x_top_still_applies():
+    with pytest.raises(StopRunError) as e:
+        check_steady_vds(387.0, 90, {})
+    assert e.value.code == "PROBE_CHECK"
+
+
+def test_ten_times_probe_mistake_at_low_line_is_still_caught():
+    with pytest.raises(StopRunError) as e:
+        check_steady_vds(2500.0, 90, {}, fet_rating_v=650.0)   # real 250 V read as 2500 V
+    assert e.value.code == "PROBE_CHECK" and "attenuation" in e.value.reason
+
+
+def test_a_real_overvoltage_below_the_top_passes_the_probe_check():
+    # 700 V is believable as a measurement; the LIMIT check then makes it FAIL
+    # (see tests/test_steady_over_limit.py), so it is not hidden as ERROR.
+    assert check_steady_vds(700.0, 90, {}, fet_rating_v=650.0) == 700.0
+
+
+def test_rating_factor_comes_from_the_config():
+    with pytest.raises(StopRunError):
+        check_steady_vds(700.0, 90, {"probe_check_max_x_rating": 1.0}, fet_rating_v=650.0)
+
+
+def test_low_line_run_with_high_reflected_voltage_passes(tmp_path):
+    # Simulated DUT at 90 Vac whose steady VDS peak is 127 + 260 = 387 V.
+    t = testtypes.get_test("vds_turnoff")
+    cfg = t.default_config()
+    cfg["ac_conditions"] = [c for c in cfg["ac_conditions"] if c["voltage"] == 90]
+    cfg["simulation"] = {"vds_reflected": 260.0}
+    res = run_test(t, cfg, simulate=True, output_root=str(tmp_path))
+    assert [r["result"] for r in res.rows] == ["PASS"]
+
+
+def test_nan_steady_vds_is_no_reading():
+    with pytest.raises(PointError) as e:
+        check_steady_vds(float("nan"), 230, {})
+    assert e.value.code == "NO_READING"
+
+
+@pytest.mark.parametrize("vout", [0.0, 5.0, 22.0, 30.0])
+def test_ovp_steady_output_must_be_normal_and_below_the_trigger(vout):
+    with pytest.raises(PointError) as e:
+        check_steady_output(vout, expected_v=20.0, trigger_v=22.0)
+    assert e.value.code == "PROBE_CHECK"
+    assert check_steady_output(20.0, expected_v=20.0, trigger_v=22.0) == 20.0
+
+
+# ---- through a simulated run ---------------------------------------------- #
+@pytest.mark.parametrize("test_id", ["vds_turnoff", "vds_ovp"])
+def test_disconnected_probe_is_error_probe_check(test_id, tmp_path):
+    res = _run(test_id, tmp_path, probe_disconnected=True)
+    assert res.rows and all(r["result"] == ERROR for r in res.rows)
+    assert {r["error_code"] for r in res.rows} == {"PROBE_CHECK"}
+
+
+@pytest.mark.parametrize("steady_out", [5.0, 25.0])
+def test_ovp_wrong_output_reading_is_probe_check(steady_out, tmp_path):
+    res = _run("vds_ovp", tmp_path, steady_out=steady_out)
+    assert res.rows[0]["result"] == ERROR
+    assert res.rows[0]["error_code"] == "PROBE_CHECK"
+
+
+def test_probe_check_happens_before_ac_is_cut(tmp_path):
+    t = testtypes.get_test("vds_turnoff")
+    cfg = t.default_config()
+    cfg["simulation"] = {"probe_disconnected": True}
+    inst = build_instruments(t.required_instruments, cfg, simulate=True)
+    armed = []
+    inst["scope"].arm_single = lambda: armed.append(True) or True
+    ctx = RunContext(run_dir=str(tmp_path), screenshot_dir=str(tmp_path), simulate=True,
+                     prompt=lambda m: None, status=lambda m: None)
+    with pytest.raises(PointError):
+        t.execute_point(t.plan(cfg)[0], inst, cfg, ctx)
+    assert armed == []                         # never armed, never measured a "turn-off"
+    assert inst["ac_source"].bench.ac_on is False   # and the DUT was left off

@@ -10,6 +10,8 @@ the model.
 """
 import time
 
+from .replies import parse_number, parse_on_off
+
 CMDS = {
     "mode_cc": "FUNCtion CURRent",
     "cc_level": "CURRent {i}",                    # static CC current level (A)
@@ -23,6 +25,8 @@ CMDS = {
     "tran_off": "TRANsient OFF",
     "input_on": "INPut ON",
     "input_off": "INPut OFF",
+    "meas_curr": "MEASure:CURRent?",             # measured input current (A)
+    "input_q": "INPut?",
 }
 
 
@@ -64,9 +68,30 @@ class ITechLoad:
         w(CMDS["input_on"])
         print(f"[E-load] static CC {current} A")
 
+    def measure_current(self):
+        """The current the load really draws, in A. In transient mode this is
+        the AVERAGE over the load's measuring window (the load cannot report
+        the peak of each step), so the test compares it with the expected
+        average current."""
+        return parse_number(self.inst.query(CMDS["meas_curr"]), unit="A",
+                            what="e-load measured current")
+
     def stop(self):
-        self.inst.write(CMDS["tran_off"])
-        self.inst.write(CMDS["input_off"])
+        """INPut OFF first: that is the command that really stops the current.
+        (Before, TRANsient OFF was sent first, so if it failed the input stayed
+        on.) Both are tried; the first error is raised after both attempts."""
+        first_error = None
+        for cmd in (CMDS["input_off"], CMDS["tran_off"]):
+            try:
+                self.inst.write(cmd)
+            except Exception as e:  # noqa: BLE001 - try the other one too
+                first_error = first_error or e
+        if first_error is not None:
+            raise first_error
+
+    def input_is_on(self):
+        """Ask the load whether its input is on (used to CONFIRM load off)."""
+        return parse_on_off(self.inst.query(CMDS["input_q"]), what="e-load input")
 
     def close(self):
         try:
