@@ -73,6 +73,11 @@ FAULTS = {
     "scope_not_rearmed": "the scope ignores ':STARt', so it never starts a new "
                          "capture and the old waveform stays on screen",
     "probe_disconnected": "CH1 reads about 0.3 V of noise (VDS probe not connected)",
+    # load and connection faults
+    "load_reach_factor": "the e-load draws only this fraction of its setting, e.g. "
+                         "0.33 -> 1 A instead of 3 A (current limit, DUT folds back)",
+    "ac_disconnect_after": "the AC source answers this many commands, then drops the "
+                           "connection for good - its output stays as it was",
 }
 
 # Read-back queries that CONFIRM an instrument is off, and its OFF command.
@@ -96,6 +101,8 @@ class Bench:
                              f"known: {sorted(FAULTS)}")
         self.faults = dict(faults or {})
         self.faults_used = set()     # one-time faults that already happened
+        self.ac_commands = 0         # for ac_disconnect_after
+        self.ac_lost = False
         self.log = []
         self._log_lock = threading.Lock()
         self.ac_voltage = 0.0
@@ -131,6 +138,16 @@ class Bench:
             return True
         return False
 
+    def connection_lost(self, role):
+        """ac_disconnect_after: True once the AC source has dropped its connection."""
+        limit = self.faults.get("ac_disconnect_after")
+        if role != "ac_source" or limit is None:
+            return False
+        if not self.ac_lost:
+            self.ac_commands += 1
+            self.ac_lost = self.ac_commands > int(limit)
+        return self.ac_lost
+
     def record(self, role, cmd, reply):
         with self._log_lock:
             self.log.append((role, cmd, reply))
@@ -162,10 +179,12 @@ class Bench:
         ld = self.load
         if not ld["input"]:
             return 0.0
+        reach = float(self.faults.get("load_reach_factor", 1.0))
         if ld["tran"]:
             total = ld["aw"] + ld["bw"]
-            return (ld["a"] * ld["aw"] + ld["b"] * ld["bw"]) / total if total else 0.0
-        return ld["cc"]
+            avg = (ld["a"] * ld["aw"] + ld["b"] * ld["bw"]) / total if total else 0.0
+            return avg * reach
+        return ld["cc"] * reach
 
     def steady_vds(self):
         return self.ac_voltage * 1.41421 + self.reflected
@@ -453,6 +472,9 @@ class SCPIServer(threading.Thread):
                     cmd = line.decode(errors="replace").strip()
                     if not cmd:
                         continue
+                    if self.bench.connection_lost(self.role):
+                        self.bench.record(self.role, cmd, "<CONNECTION LOST>")
+                        return                     # finally: closes the connection
                     resp = self.handler(self.bench, cmd)
                     self.bench.record(self.role, cmd, None if resp is None else
                                       "<PNG>" if isinstance(resp, tuple) else str(resp))

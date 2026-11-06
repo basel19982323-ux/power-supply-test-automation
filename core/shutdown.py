@@ -36,8 +36,11 @@ def shutdown_bench(instruments, status=print, record=None):
     Returns a list of warning strings (empty when everything is confirmed off).
     If `record` (a dict) is given, it is filled per role with
     {"off_sent": bool, "confirmed_off": True / False / None, "state": text}:
-    confirmed_off is True only if the instrument answered "off", False if it
-    answered "on", None if it could not be asked or gave no valid answer.
+    off_sent is True if the PC sent the OFF command without an error - that
+    does NOT prove the instrument received it (a dropped TCP connection can
+    still accept the bytes). confirmed_off is True only if the instrument
+    answered "off", False if it answered "on", None if it could not be asked
+    or gave no valid answer.
     Never raises."""
     warnings = []
     record = {} if record is None else record
