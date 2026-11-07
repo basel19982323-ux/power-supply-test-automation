@@ -34,3 +34,24 @@ def test_sequence_reports(tmp_path):
     for step in results:
         dut = step["config"]["dut_name"]
         assert os.path.exists(os.path.join(step["result"].run_dir, f"{dut}_report.xlsx"))
+
+
+def test_runs_started_in_the_same_second_get_their_own_folders(tmp_path):
+    from core.results import new_run_dir
+    dirs = {new_run_dir("DUT-01", str(tmp_path)) for _ in range(3)}
+    assert len(dirs) == 3                        # never the same folder twice
+
+
+def test_quick_sequence_steps_do_not_overwrite_each_other(tmp_path):
+    import os
+
+    from core.results import read_csv
+    from core.sequence import run_sequence
+    steps = [{"test_id": "vds_turnoff", "config_path": None},
+             {"test_id": "vds_ovp", "config_path": None}]
+    seq = run_sequence(steps, simulate=True, output_root=str(tmp_path),
+                       on_status=lambda m: None)
+    first, second = (st["result"] for st in seq.steps)
+    assert first.run_dir != second.run_dir
+    assert len(read_csv(os.path.join(first.run_dir, "results.csv"))) == 2    # VDS: 2 points
+    assert len(read_csv(os.path.join(second.run_dir, "results.csv"))) == 1   # OVP: 1 point

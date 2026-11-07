@@ -15,6 +15,7 @@ excel:
     error:   "B7"      # points whose measurement could not be trusted
     not_run: "B8"      # points never measured
     overall: "B9"      # PASS / FAIL / ERROR / NOT RUN for the whole run
+    mode:    "B10"     # SIMULATION / FAKE BENCH / LIVE / MIXED / ...
   # Sheet + top-left cell where the per-point results table is written.
   # Columns are written in the test's csv_fields order, one row per test point.
   results_sheet: "Results"

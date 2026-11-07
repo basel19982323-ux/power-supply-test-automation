@@ -56,11 +56,55 @@ def block(data):
     return b"#" + str(len(n)).encode() + n + data
 
 
+# Fault switches: name -> what the fake instrument does wrong. Tests turn them
+# on with Bench(faults={"name": value}). An unknown name is an error, so a typo
+# can never make a test silently run with no fault at all.
+FAULTS = {
+    "ac_ignores_off": "the AC source accepts 'OUTPut OFF' but its output stays ON "
+                      "(like a source left in local/front-panel mode)",
+    # communication faults
+    "ac_no_reply_once": "the AC source does not answer its next MEASure? query "
+                        "(once), so the driver's read times out",
+    "scope_garbage_reply": "the scope answers 'ABC' to measurement queries",
+    "scope_wrong_unit": "the scope answers in amps, e.g. '5.680E+02A' (CH1 set to a "
+                        "current probe by mistake)",
+    # scope faults
+    "scope_never_triggers": "the single-shot stays armed and never triggers",
+    "scope_not_rearmed": "the scope ignores ':STARt', so it never starts a new "
+                         "capture and the old waveform stays on screen",
+    "probe_disconnected": "CH1 reads about 0.3 V of noise (VDS probe not connected)",
+    # load and connection faults
+    "load_reach_factor": "the e-load draws only this fraction of its setting, e.g. "
+                         "0.33 -> 1 A instead of 3 A (current limit, DUT folds back)",
+    "ac_disconnect_after": "the AC source answers this many commands, then drops the "
+                           "connection for good - its output stays as it was",
+}
+
+# Read-back queries that CONFIRM an instrument is off, and its OFF command.
+OFF_CHECK = {"ac_source": ("OUTPUT OFF", "OUTPUT?", "OUTPUT ON"),
+             "e_load": ("INPUT OFF", "INPUT?", "INPUT ON")}
+
+
 class Bench:
-    """Shared state across the three fake instruments (like the app's SimBench)."""
+    """Shared state across the three fake instruments (like the app's SimBench).
+
+    `log` records every command each instrument received and what it answered,
+    as (role, command, reply) - reply is None when nothing was sent back. Tests
+    use it to check what the REAL drivers sent, e.g. that "OUTPut OFF" was sent
+    and that "OUTPut?" was then answered "0" (off confirmed)."""
 
     def __init__(self, reflected=100.0, spike_factor=1.2, pd_nominal=5.0,
-                 steady_out=20.0, ovp_vout=28.0, ovp_vds_factor=1.3):
+                 steady_out=20.0, ovp_vout=28.0, ovp_vds_factor=1.3, faults=None):
+        unknown = set(faults or {}) - set(FAULTS)
+        if unknown:
+            raise ValueError(f"unknown fake-bench fault(s): {sorted(unknown)}; "
+                             f"known: {sorted(FAULTS)}")
+        self.faults = dict(faults or {})
+        self.faults_used = set()     # one-time faults that already happened
+        self.ac_commands = 0         # for ac_disconnect_after
+        self.ac_lost = False
+        self.log = []
+        self._log_lock = threading.Lock()
         self.ac_voltage = 0.0
         self.ac_freq = 50.0
         self.ac_on = False
@@ -87,16 +131,60 @@ class Bench:
         self.ovp = {"vds": 0.0, "vds_top": 0.0, "vds_clip": False,
                     "vout": 0.0, "vout_top": 0.0}
 
+    def fault_once(self, name):
+        """True the first time a one-time fault applies, then False."""
+        if self.faults.get(name) and name not in self.faults_used:
+            self.faults_used.add(name)
+            return True
+        return False
+
+    def connection_lost(self, role):
+        """ac_disconnect_after: True once the AC source has dropped its connection."""
+        limit = self.faults.get("ac_disconnect_after")
+        if role != "ac_source" or limit is None:
+            return False
+        if not self.ac_lost:
+            self.ac_commands += 1
+            self.ac_lost = self.ac_commands > int(limit)
+        return self.ac_lost
+
+    def record(self, role, cmd, reply):
+        with self._log_lock:
+            self.log.append((role, cmd, reply))
+
+    def sent(self, role):
+        """Commands `role` received, upper-case, in order."""
+        return [c.upper() for r, c, _ in self.log if r == role]
+
+    def off_state(self, role):
+        """What the fake instrument itself saw at the end, as (sent, confirmed):
+        sent      = it received its OFF command;
+        confirmed = its LAST read-back query was answered "0" (off), after an
+                    OFF command, and no ON command came after that answer."""
+        off_cmd, query, on_cmd = OFF_CHECK[role]
+        entries = [(c.upper(), r) for ro, c, r in self.log if ro == role]
+        sent = any(c == off_cmd for c, _ in entries)
+        asked = [i for i, (c, _) in enumerate(entries) if c == query]
+        if not sent or not asked:
+            return sent, False
+        last = asked[-1]
+        confirmed = ((entries[last][1] or "").strip() == "0"
+                     and any(c == off_cmd for c, _ in entries[:last])
+                     and not any(c == on_cmd for c, _ in entries[last + 1:]))
+        return sent, confirmed
+
     def load_current(self):
         """What the fake e-load draws: the static level, or the time-average of
         the two transient levels; 0 A with the input off."""
         ld = self.load
         if not ld["input"]:
             return 0.0
+        reach = float(self.faults.get("load_reach_factor", 1.0))
         if ld["tran"]:
             total = ld["aw"] + ld["bw"]
-            return (ld["a"] * ld["aw"] + ld["b"] * ld["bw"]) / total if total else 0.0
-        return ld["cc"]
+            avg = (ld["a"] * ld["aw"] + ld["b"] * ld["bw"]) / total if total else 0.0
+            return avg * reach
+        return ld["cc"] * reach
 
     def steady_vds(self):
         return self.ac_voltage * 1.41421 + self.reflected
@@ -117,10 +205,14 @@ def ac_handler(bench, cmd):
     if u.startswith("*RST") or u.startswith("*CLS"):
         return None
     if u.startswith("MEAS"):                       # MEASure:VOLTage?
+        if bench.fault_once("ac_no_reply_once"):
+            return None                            # no answer -> the driver times out
         return f"{(bench.ac_voltage if bench.ac_on else 0.0):.3f}"
     if u.startswith("OUTP"):
         if u.endswith("?"):                        # OUTPut? (confirm on/off)
             return "1" if bench.ac_on else "0"
+        if "OFF" in u and bench.faults.get("ac_ignores_off"):
+            return None                            # accepted, but nothing happens
         bench.ac_on = "ON" in u
         return None
     if u.startswith("VOLT"):
@@ -204,6 +296,8 @@ def scope_handler(bench, cmd):
             bench.zoom_window = last_num(cmd) * 10
         return None
     if u.startswith(":STAR"):                      # arm single-shot
+        if bench.faults.get("scope_not_rearmed"):
+            return None                            # accepted, but nothing happens
         bench.armed = True
         bench.forced = False
         bench.polls_since_arm = 0
@@ -225,6 +319,8 @@ def scope_handler(bench, cmd):
         ovp = (bench.trig_source == 2)
         if not bench.armed or bench.forced:
             running = False
+        elif bench.faults.get("scope_never_triggers"):
+            running = True                          # waits forever for a trigger
         elif ovp:
             running = bench.polls_since_arm == 1
         else:
@@ -232,6 +328,10 @@ def scope_handler(bench, cmd):
         return "1" if running else "0"
     if ":MEAS" in u:
         if "MAX" in u and "VAL" in u:
+            if bench.faults.get("scope_garbage_reply"):
+                return "ABC"
+            if bench.faults.get("scope_wrong_unit"):
+                return f"{_scope_max(bench, chan_of(u)):.3E}A"
             return f"{_scope_max(bench, chan_of(u)):.4f}"
         if "MIN" in u and "VAL" in u:
             return f"{bench.pd_nominal * 0.98:.4f}"
@@ -244,6 +344,8 @@ def scope_handler(bench, cmd):
 
 
 def _scope_max(bench, ch=1):
+    if ch == 1 and bench.faults.get("probe_disconnected"):
+        return 0.3                                  # noise on an open probe
     ovp = (bench.trig_source == 2)
     captured = bench.armed and (ovp or not bench.ac_on or bench.forced)
     top = bench.screen_top(ch)
@@ -305,15 +407,31 @@ def _scope_png(bench):
 # TCP SCPI server
 # --------------------------------------------------------------------------- #
 class SCPIServer(threading.Thread):
-    def __init__(self, label, host, port, handler, bench, verbose=False):
+    def __init__(self, label, host, port, handler, bench, verbose=False, role=None):
         super().__init__(daemon=True)
         self.label = label
+        self.role = role or HANDLER_ROLES.get(handler, label)
         self.host = host
         self.port = port
         self.handler = handler
         self.bench = bench
         self.verbose = verbose
         self.sock = None
+        self.conns = []
+        self.stopped = False
+
+    @property
+    def address(self):
+        return f"TCPIP0::{self.host}::{self.port}::SOCKET"
+
+    def stop(self):
+        """Close the listening socket and every open connection."""
+        self.stopped = True
+        for s in [self.sock] + self.conns:
+            try:
+                s.close()
+            except (OSError, AttributeError):
+                pass
 
     def bind(self):
         """Bind the port up front (no SO_REUSEADDR) so a second copy of the fake
@@ -326,12 +444,17 @@ class SCPIServer(threading.Thread):
             self.sock.close()
             self.sock = None
             return False
+        self.port = self.sock.getsockname()[1]      # the real port when port=0
         self.sock.listen(5)
         return True
 
     def run(self):
-        while True:
-            conn, _ = self.sock.accept()
+        while not self.stopped:
+            try:
+                conn, _ = self.sock.accept()
+            except OSError:                          # stop() closed the socket
+                return
+            self.conns.append(conn)
             threading.Thread(target=self._serve, args=(conn,), daemon=True).start()
 
     def _serve(self, conn):
@@ -349,7 +472,12 @@ class SCPIServer(threading.Thread):
                     cmd = line.decode(errors="replace").strip()
                     if not cmd:
                         continue
+                    if self.bench.connection_lost(self.role):
+                        self.bench.record(self.role, cmd, "<CONNECTION LOST>")
+                        return                     # finally: closes the connection
                     resp = self.handler(self.bench, cmd)
+                    self.bench.record(self.role, cmd, None if resp is None else
+                                      "<PNG>" if isinstance(resp, tuple) else str(resp))
                     if self.verbose:
                         print(f"[{self.label}] <- {cmd}")
                     if resp is None:
@@ -371,6 +499,27 @@ class SCPIServer(threading.Thread):
                 conn.close()
             except OSError:
                 pass
+
+
+HANDLER_ROLES = {ac_handler: "ac_source", eload_handler: "e_load",
+                 scope_handler: "scope"}
+ROLE_HANDLERS = {role: h for h, role in HANDLER_ROLES.items()}
+
+
+def start_servers(bench, host="127.0.0.1", ports=None, verbose=False):
+    """Start one server per role (port 0 = any free port) and return
+    {role: server}. Used by the tests; stop them with server.stop()."""
+    ports = ports or {role: 0 for role in ROLE_HANDLERS}
+    servers = {}
+    for role, port in ports.items():
+        s = SCPIServer(role, host, port, ROLE_HANDLERS[role], bench, verbose, role=role)
+        if not s.bind():
+            for started in servers.values():
+                started.stop()
+            raise OSError(f"fake bench: cannot bind {host}:{port} for {role}")
+        s.start()
+        servers[role] = s
+    return servers
 
 
 def main():

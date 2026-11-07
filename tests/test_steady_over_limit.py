@@ -17,10 +17,8 @@ from core.config import save_config
 from core.results import new_run_dir, read_csv
 from core.runner import run_test
 from core.sequence import run_sequence
-from core.test_base import Callbacks
 from core.verdict import ERROR, FAIL, NOT_RUN, PASS, PointError, StopRunError
 from testtypes.common import check_steady_below_limit, check_steady_vds
-from tools import fake_bench as fb
 
 LIMIT = 585.0          # default: 650 V FET x 90 % derating
 
@@ -166,42 +164,17 @@ def test_cli_exit_code_is_fail(tmp_path, monkeypatch, capsys):
 
 
 # ---- real drivers against the fake SCPI bench ----------------------------- #
-@pytest.fixture
-def fake_bench():
-    """Start the fake bench on free ports and log every command it receives."""
-    bench = fb.Bench(reflected=_reflected_for(700.0, 230))
-    log, ports = [], {}
-    handlers = {"ac_source": fb.ac_handler, "e_load": fb.eload_handler,
-                "scope": fb.scope_handler}
-    for role, handler in handlers.items():
-        def logged(b, cmd, handler=handler, role=role):
-            log.append((role, cmd.upper()))
-            return handler(b, cmd)
-        server = fb.SCPIServer(role, "127.0.0.1", 0, logged, bench)
-        assert server.bind()
-        ports[role] = server.sock.getsockname()[1]
-        server.start()
-    return bench, log, ports
-
-
 @pytest.mark.parametrize("test_id", ["vds_turnoff", "vds_ovp"])
-def test_real_drivers_never_start_the_event(fake_bench, tmp_path, test_id):
-    bench, log, ports = fake_bench
-    t = testtypes.get_test(test_id)
-    cfg = t.default_config()
+def test_real_drivers_never_start_the_event(run_on_fake_bench, test_id):
+    cfg = testtypes.get_test(test_id).default_config()
     cfg["ac_conditions"] = [{"label": "230Vac/50Hz", "voltage": 230, "frequency": 50}] * 2
-    cfg["instruments"] = {r: f"TCPIP0::127.0.0.1::{p}::SOCKET"
-                          for r, p in ports.items() if r in t.required_instruments}
-    cfg["scope"]["settle_s"] = 0
-    prompts = []
-    res = run_test(t, cfg, simulate=False, output_root=str(tmp_path),
-                   callbacks=Callbacks(prompt=prompts.append))
+    res, bench, prompts = run_on_fake_bench(test_id, cfg=cfg,
+                                            reflected=_reflected_for(700.0, 230))
 
     assert [r["result"] for r in res.rows] == [FAIL, NOT_RUN]
     assert res.rows[0]["error_code"] == "STEADY_OVER_LIMIT"
     assert prompts == []                         # the operator was never asked to act
-    scope_cmds = [c for role, c in log if role == "scope"]
-    assert not any(c.startswith(":STAR") for c in scope_cmds)     # never armed
+    assert not any(c.startswith(":STAR") for c in bench.sent("scope"))   # never armed
     assert bench.ac_on is False and res.warnings == []            # AC confirmed OFF
     if test_id == "vds_ovp":
         assert bench.load["input"] is False                       # load confirmed OFF

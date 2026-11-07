@@ -31,3 +31,22 @@ jobs:
 
       - name: Run tests
         run: python -m pytest
+
+      # Headless demo: run the three tests with simulated instruments and make
+      # the reports (they say "Run mode: SIMULATION"). bash -e stops the step if
+      # a run does not PASS or a report can't be written.
+      - name: Demo run in simulation with reports
+        if: always()
+        shell: bash
+        run: |
+          python cli.py --test dynamic_output_response --simulate --report
+          python cli.py --test vds_turnoff --simulate --report
+          python cli.py --test vds_ovp --simulate --report
+
+      - name: Upload the simulation demo reports
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: simulation-demo-reports
+          path: output/
+          if-no-files-found: error

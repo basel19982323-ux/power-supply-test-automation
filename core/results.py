@@ -25,7 +25,20 @@ def _safe(name: str) -> str:
 def new_run_dir(dut_name: str, output_root: str = OUTPUT_ROOT) -> str:
     """Create and return a fresh timestamped run folder (+ screenshots subdir)."""
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-    run_dir = os.path.join(output_root, f"{_safe(dut_name)}_{stamp}")
+    base = os.path.join(output_root, f"{_safe(dut_name)}_{stamp}")
+    os.makedirs(output_root, exist_ok=True)
+    # Two runs started in the same second (quick simulated runs, Sequence
+    # steps) must not share a folder - they would overwrite each other's
+    # results.csv and reports. os.mkdir fails if the folder already exists.
+    for n in range(1, 1000):
+        run_dir = base if n == 1 else f"{base}_{n}"
+        try:
+            os.mkdir(run_dir)
+            break
+        except FileExistsError:
+            continue
+    else:
+        raise OSError(f"could not create a new run folder next to {base}")
     os.makedirs(os.path.join(run_dir, "screenshots"), exist_ok=True)
     return run_dir
 

@@ -3,7 +3,7 @@
     python cli.py --list                 # list available test types
     python cli.py --scan                 # list connected VISA instruments
     python cli.py --simulate             # run the default test with fake instruments
-    python cli.py --test <id> --config path.yaml [--simulate]
+    python cli.py --test <id> --config path.yaml [--simulate] [--report]
 
 The GUI (main.py) drives the exact same runner; this CLI is handy for smoke
 tests, CI, and bench debugging.
@@ -23,6 +23,7 @@ import testtypes                               # noqa: E402
 
 # Exit code = overall result, so a script or CI job can act on it.
 EXIT_CODES = {"PASS": 0, "FAIL": 1, "ERROR": 2, "NOT RUN": 3}
+EXIT_REPORT_FAILED = 4      # --report was asked for but could not be written
 
 
 def main(argv=None):
@@ -33,6 +34,8 @@ def main(argv=None):
     p.add_argument("--config", help="path to a config .yaml (default: the test's default)")
     p.add_argument("--simulate", "--dry-run", dest="simulate", action="store_true",
                    help="run with simulated instruments (no hardware)")
+    p.add_argument("--report", action="store_true",
+                   help="also write the Excel and PowerPoint reports into the run folder")
     args = p.parse_args(argv)
 
     if args.list:
@@ -65,13 +68,25 @@ def main(argv=None):
     print(f"\nRun folder: {result.run_dir}")
     print(f"Summary: {counts_text(result.summary)}")
     print(f"Overall result: {result.overall}")
+    print(f"Run mode: {result.mode}")
     for w in result.warnings:              # safety: AC / load not confirmed off
         print(f"\n!!! {w}", file=sys.stderr)
     if result.error:
         print(f"Ended with error: {result.error}")
     if result.aborted:
         print("Run was aborted.")
-    print("Next: generate a report from the Report tab, or reporting/ CLI.")
+    if not args.report:
+        print("Next: generate a report from the Report tab, or run again with --report.")
+        return EXIT_CODES.get(result.overall, 2)
+    import reporting
+    try:
+        paths = reporting.generate(result.run_dir, test, config, rows=result.rows)
+    except Exception as e:  # noqa: BLE001 - say so, and fail the exit code
+        print(f"\n!!! The report could not be written: {type(e).__name__}: {e}",
+              file=sys.stderr)
+        return EXIT_REPORT_FAILED
+    for kind, path in paths.items():
+        print(f"Report ({kind}): {path}")
     return EXIT_CODES.get(result.overall, 2)
 
 
