@@ -9,9 +9,10 @@ power supplies (AC-DC adapters, USB-C PD chargers, flyback converters). It contr
 instruments over SCPI/VISA, runs the test matrix hands-off, judges every point PASS/FAIL against
 limits, and writes Excel and PowerPoint reports.
 
-It was built for and used on a real lab bench. It automates the steps that are otherwise done by hand for
-every test point: setting the AC input, stepping the load, adjusting the oscilloscope, reading the values and
-copying them into a report.
+An earlier, private version of this app was used on a real lab bench (see
+[Validation status](#validation-status-real-bench-vs-simulation)). It automates the steps that are
+otherwise done by hand for every test point: setting the AC input, stepping the load, adjusting the
+oscilloscope, reading the values and copying them into a report.
 
 **Author:** Basel Haijar · Electrical & Electronics Engineer · [LinkedIn](https://www.linkedin.com/in/basel-haijar)
 
@@ -42,6 +43,72 @@ copying them into a report.
   real drivers can be exercised. 23 automated tests (pytest).
 
 **Tech:** Python · PySide6 (Qt) · PyVISA / SCPI · pytest · openpyxl · python-pptx · PyInstaller
+
+## Validation status: real bench vs simulation
+
+### Tested on real instruments: the earlier, private lab version
+
+- All three tests (Dynamic Output Response, V<sub>DS</sub> max at AC turn-off and V<sub>DS</sub> at
+  OVP) ran on a real lab bench with an **earlier, private version** of this app, using the
+  **pyvisa-py** VISA backend.
+- The real lab results are not part of this repository.
+
+### Tested only in simulation and on the fake bench: this version
+
+Everything added in this version has been tested **only** with the built-in simulator and with the
+fake SCPI bench (`tools/fake_bench.py`, real drivers over TCP). **None of it has run on a real
+instrument yet.**
+
+| Feature | Real bench (earlier version) | Simulation | Fake bench (real drivers) |
+|---|:---:|:---:|:---:|
+| The three tests: basic run, auto-range, reports | Yes | Yes | Yes |
+| PASS / FAIL / ERROR / NOT RUN with fixed error codes | No (new) | Yes | Yes |
+| Safe reply parsing: NaN, garbage, wrong unit | No (new) | Yes | Yes |
+| Clip check against the full scale read back from the scope | No (new) | Yes | Yes |
+| New capture only (arm confirmed), no forced capture | No (new) | Yes | Yes |
+| Probe check, and stop if the steady V<sub>DS</sub> is already over the limit | No (new) | Yes | Yes |
+| E-load current check (load really reaches its current) | No (new) | Yes | Yes |
+| Safe shutdown: OFF **sent** and OFF **confirmed** recorded separately | No (new) | Yes | Yes |
+| Run-mode label SIMULATION / FAKE BENCH / LIVE in every report | No (new) | Yes | Yes |
+| Fault injection (timeout, bad reply, lost connection, ...) | No | Partly | Yes |
+
+**SCPI commands added in this version that have never been sent to a real instrument:**
+
+| Instrument | Command | Used for |
+|---|---|---|
+| AC source | `OUTPut?` | confirm the output is really OFF |
+| E-load | `MEASure:CURRent?` | check the load really draws its current |
+| E-load | `INPut?` | confirm the input is really OFF |
+| Scope | `:CHANnel<n>:VDIV?`, `:CHANnel<n>:OFFSet?` | read back the real full scale for the clip check |
+| Scope | `:STATus:CONDition?` (running bit) | already polled before; now also used to confirm a new single-shot started |
+
+**Before the first real run with this version:**
+
+1. Confirm the probe type and the probe attenuation by hand (see [Real hardware](#real-hardware)).
+2. Check that each command above is accepted and answers in a form the app understands. The
+   drivers keep all commands in one `CMDS` table, so a different spelling is a one-line change.
+3. Check the provisional thresholds against real readings: probe check (0.5× and 3× the AC peak,
+   top never below 1.5× the FET rating) and load check (90 % of the expected average current,
+   with the 100 Hz transient).
+4. Check that the scope reports "running" after it is armed. If it triggers at once (for example
+   the trigger level is below the normal signal), the app gives ERROR `STALE_CAPTURE`.
+
+## How a point is judged
+
+Every test point gets one of four results:
+
+| Result | Meaning | Example |
+|---|---|---|
+| **PASS** | a real number, in the right unit, from a new capture, not clipped, within the limit | V<sub>DS</sub> max 568 V ≤ limit 585 V |
+| **FAIL** | a trustworthy reading is outside the limit: the **product** failed | 600 V > 585 V; or a capture clipped at a 946.8 V full scale, shown as "≥ 946.8" |
+| **ERROR** | the measurement can't be trusted: the **bench or setup** failed | `NO_TRIGGER`, `PROBE_CHECK`, `TIMEOUT`, ... |
+| **NOT RUN** | never measured | the run stopped earlier, or Stop was pressed |
+
+Every ERROR and NOT RUN has a fixed short code and a reason. The overall result is FAIL if any point
+FAILs, otherwise ERROR or NOT RUN if any point is not PASS, and **PASS only if every point is
+PASS**. `cli.py` returns the overall result as its exit code (PASS 0, FAIL 1, ERROR 2, NOT RUN 3;
+4 if `--report` could not write the report). Results are coloured PASS green, FAIL red, ERROR
+amber, NOT RUN grey in the app and in Excel.
 
 ## Screenshots
 
