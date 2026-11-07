@@ -2,11 +2,12 @@
 
 [![tests](https://github.com/basel19982323-ux/power-supply-test-automation/actions/workflows/tests.yml/badge.svg)](https://github.com/basel19982323-ux/power-supply-test-automation/actions/workflows/tests.yml)
 
-CI runs with simulated instruments only.
+CI runs with simulated instruments only: the tests, plus a headless demo of the three tests whose
+Excel and PowerPoint reports are uploaded as the `simulation-demo-reports` artifact of each run.
 
 **Dynamic Load Test** is a Windows desktop application that automates electrical verification tests on
 power supplies (AC-DC adapters, USB-C PD chargers, flyback converters). It controls the bench
-instruments over SCPI/VISA, runs the test matrix hands-off, judges every point PASS/FAIL against
+instruments over SCPI/VISA, runs the test matrix hands-off, judges every point PASS / FAIL / ERROR / NOT RUN against
 limits, and writes Excel and PowerPoint reports.
 
 An earlier, private version of this app was used on a real lab bench (see
@@ -39,8 +40,11 @@ oscilloscope, reading the values and copying them into a report.
   "1.5 × FET rating" top of the probe check is a provisional measurement check, not a safe voltage.
 - **Pluggable test framework**: a new test type is one class; the GUI, runner, sequencing and
   reporting pick it up automatically.
+- **Four results, not two**: PASS / FAIL / ERROR / NOT RUN, so a broken measurement is never
+  reported as a good (or bad) product. Every ERROR has a fixed code and a reason.
 - **Testable without hardware**: a simulation mode, plus a fake bench that speaks SCPI over TCP so the
-  real drivers can be exercised. 23 automated tests (pytest).
+  real drivers can be exercised, including fault injection (timeouts, bad replies, a lost
+  connection, a scope that never triggers, ...). About 250 automated tests (pytest), run by CI.
 
 **Tech:** Python · PySide6 (Qt) · PyVISA / SCPI · pytest · openpyxl · python-pptx · PyInstaller
 
@@ -61,7 +65,7 @@ instrument yet.**
 
 | Feature | Real bench (earlier version) | Simulation | Fake bench (real drivers) |
 |---|:---:|:---:|:---:|
-| The three tests: basic run, auto-range, reports | Yes | Yes | Yes |
+| The three tests (the basic test flow) | Yes | Yes | Yes |
 | PASS / FAIL / ERROR / NOT RUN with fixed error codes | No (new) | Yes | Yes |
 | Safe reply parsing: NaN, garbage, wrong unit | No (new) | Yes | Yes |
 | Clip check against the full scale read back from the scope | No (new) | Yes | Yes |
@@ -113,22 +117,24 @@ amber, NOT RUN grey in the app and in Excel.
 ## Screenshots
 
 All screenshots are from **Simulation mode** (no hardware connected), so the values are simulated.
+They were taken with an earlier version of the UI, before ERROR / NOT RUN and the run-mode label
+were added.
 
-**VDS max at AC turn-off**: single-shot capture with the wide view (bulk-capacitor discharge) and the
+**VDS max at AC turn-off (simulation)**: single-shot capture with the wide view (bulk-capacitor discharge) and the
 zoomed turn-off detail, judged against the derated MOSFET rating:
 
 ![VDS turn-off run](docs/screenshots/run_vds_turnoff.png)
 
-**Dynamic output response**: 16-point matrix (4 USB-C PD profiles × 4 AC input conditions) with the
+**Dynamic output response (simulation)**: 16-point matrix (4 USB-C PD profiles × 4 AC input conditions) with the
 latest waveform:
 
 ![Dynamic output response run](docs/screenshots/run_dynamic_output.png)
 
-**Setup**: AC conditions, PD profiles and transient settings are edited in tables and saved as YAML:
+**Setup (simulation)**: AC conditions, PD profiles and transient settings are edited in tables and saved as YAML:
 
 ![Setup tab](docs/screenshots/setup.png)
 
-**Report**: results with limits, exported to Excel and PowerPoint:
+**Report (simulation)**: results with limits, exported to Excel and PowerPoint:
 
 ![Report tab](docs/screenshots/report.png)
 
@@ -173,6 +179,7 @@ Headless / CI smoke test (no GUI):
 
 ```bat
 .venv\Scripts\python cli.py --simulate
+.venv\Scripts\python cli.py --test vds_turnoff --simulate --report   :: also writes Excel + PPTX
 .venv\Scripts\python -m pytest
 ```
 
@@ -186,21 +193,26 @@ Headless / CI smoke test (no GUI):
    confirms each `*IDN?`. Choose the POWER-Z mode (manual/gui).
 3. **Setup** — edit AC conditions, PD profiles, transient settings, and limits in
    tables/fields. **Save/Load** named configs (YAML).
-4. **Run** — **Start**/**Abort**, a live progress table with PASS/FAIL coloring,
-   running counts, and the latest waveform. In manual POWER-Z mode a dialog asks
+4. **Run** — **Start**/**Abort**, a live progress table coloured by result
+   (PASS / FAIL / ERROR / NOT RUN), all four counts, the overall result, and the latest
+   waveform. If the AC source or e-load could not be confirmed OFF at the end, a
+   "Bench may still be ON" warning appears. In manual POWER-Z mode a dialog asks
    you to set the decoy once per output voltage.
 5. **Report** — generate Excel + PowerPoint (built-in layout or your company
    template) and open the output folder.
 6. **Sequence** — assemble an ordered suite of tests (each a test type + saved config),
-   **Run all** in succession with per-step PASS/FAIL, then a combined report. Each step
+   **Run all** in succession with a result per step, then a combined report. After a
+   bench problem the later steps are NOT RUN. Each step
    also writes its own timestamped run folder under `output/sequences/SEQ_<timestamp>/`.
 
 Every run is saved to its own timestamped folder under `output/` (results never
-overwrite each other):
+overwrite each other; a second run in the same second gets `_2`):
 
 ```
 output/<DUT>_<YYYYMMDD-HHMMSS>/
     results.csv
+    run_info.json       run mode (SIMULATION / FAKE BENCH / LIVE) and the evidence,
+                        and whether each instrument's OFF was sent and confirmed
     screenshots/*.png
     <DUT>_report.xlsx   <DUT>_report.pptx   (after you generate them)
 ```
@@ -209,9 +221,10 @@ output/<DUT>_<YYYYMMDD-HHMMSS>/
 
 ## Real hardware
 
-1. Install the VISA backend (only needed for live runs):
+1. The VISA backend **pyvisa-py** (the one the earlier lab version used) is installed by
+   `setup.bat`. For USB instruments and LAN discovery, also install:
    ```bat
-   .venv\Scripts\python -m pip install pyvisa-py pyusb psutil zeroconf
+   .venv\Scripts\python -m pip install pyusb psutil zeroconf
    ```
 2. Connect the AC source, e-load, and scope (LAN recommended; USB works). On the
    Yokogawa enable the remote interface (Utility → Remote Ctrl → Network →
@@ -225,9 +238,12 @@ varies by model/firmware. Each driver prints `*IDN?` on connect and keeps all
 commands in one `CMDS` dict at the top of its file — if a command errors, check
 that model's programming manual and fix one line. Plan ~1–2 hours of first-run
 debugging with instruments live; after that a full 16-point matrix runs in
-minutes, hands-off. Safety behaviors are built in: AC output off between
-conditions, load input off after each point, and a sanity-abort if a reading is
-wildly out of range (bad probe).
+minutes, hands-off. Safety behaviour is built in: AC output off between
+conditions, load input off after each point, a sanity-abort if a reading is
+wildly out of range, and at the end of every run: load OFF, AC OFF, then the app
+**asks each instrument whether it is really off**. "OFF sent" is not enough;
+only the instrument's own answer counts, and if it can't be confirmed the app
+warns that the DUT may still be live.
 
 **Before any real-hardware run: confirm the probes by hand.** The engineer must
 check the probe type (for example a high-voltage differential probe on the
@@ -275,6 +291,33 @@ Two levels:
   a real instrument proves that. Select a different VISA backend with the
   `DLT_VISA_BACKEND` env var (default `@py`; e.g. `@sim` for pyvisa-sim).
 
+### Fault-injection tests
+
+The fake bench has fault switches (`FAULTS` in `tools/fake_bench.py`), and the tests in
+`tests/test_fake_bench_faults.py` run the **real drivers** against a faulty bench. Each test checks
+that no point is PASS, that the right ERROR code is given, and that the AC source and e-load OFF
+was both **sent** and **confirmed by the instrument** (from the fake bench's own command log):
+
+| Fault | Result |
+|---|---|
+| instrument does not answer | ERROR `TIMEOUT`, run stops |
+| reply `ABC` instead of a number | ERROR `BAD_REPLY`, run stops |
+| reply in the wrong unit, `5.680E+02A` | ERROR `WRONG_UNIT`, run stops |
+| scope never triggers | ERROR `NO_TRIGGER` (no forced capture) |
+| scope does not start a new capture | ERROR `STALE_CAPTURE` |
+| VDS probe disconnected (about 0 V) | ERROR `PROBE_CHECK`, no test event |
+| e-load draws only 1 A of 3 A | ERROR `LOAD_NOT_REACHED` |
+| AC source drops the connection while ON | run stops; AC **not confirmed** OFF, warning |
+| AC source ignores OFF | OFF sent, instrument says ON, warning |
+
+With pyvisa-py a dropped connection shows up as a VISA timeout, so the code is `TIMEOUT`.
+
+### CI demo
+
+Every CI run also runs `cli.py --simulate --report` for the three tests and uploads the reports.
+Open the run on the **Actions** tab and download **simulation-demo-reports**. The reports say
+**Run mode: SIMULATION**.
+
 ## Reports & the company template
 
 Without a template, the app writes a clean built-in layout. When you have the
@@ -321,13 +364,16 @@ or installed alongside.
 ```
 main.py            app entry point            cli.py     headless engine runner
 core/              engine: runner, config, results, sequence, VISA scan,
+                   verdict (the four results + error codes), shutdown, run_mode,
                    datasheet (VDS-rating extractor), TestType base
-  instruments/     drivers (real) + simulator + factory
-testtypes/         pluggable tests: dynamic_output_response, vds_turnoff
+  instruments/     drivers (real) + simulator + factory + safe reply parsing
+testtypes/         pluggable tests: dynamic_output_response, vds_turnoff, vds_ovp
 reporting/         Excel + PPTX builders, template-fill, sequence summary, templates/
 ui/                PySide6 tabs + threaded run/sequence workers
 configs/           saved test configs (YAML)
-tests/             pytest suite (engine, config, reporting, vds, datasheet, sequence)
+tools/             fake_bench.py: fake SCPI instruments with fault switches
+tests/             pytest suite (results, readings, safety checks, shutdown, run mode,
+                   fake-bench fault injection, reporting, sequence, ...)
 ```
 
 ---
